@@ -1,0 +1,66 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Node.js/JavaScript/TypeScript
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.turbo/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Java/Maven
+target/
+*.class
+*.jar
+.gradle/
+.m2/
+.mvn/timing.properties
+
+# IDE and editor state
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary/local tooling
+*.tmp
+*.bak
+*.orig
+get-docker.sh
+
+# Specify
+.specify/tmp/
+.specify-gemini/tmp/

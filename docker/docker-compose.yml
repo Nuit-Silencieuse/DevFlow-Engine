@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # PostgreSQL (for Temporal and Application State)
+  postgres:
+    image: postgres:14
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=devflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # Temporal Server
+  temporal:
+    image: temporalio/auto-setup:1.23.0
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=postgres
+      - POSTGRES_SEEDS=postgres
+    ports:
+      - "7233:7233"
+    depends_on:
+      - postgres
+
+  # Temporal Web UI
+  temporal-ui:
+    image: temporalio/ui:2.23.0
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8234:8080"
+    depends_on:
+      - temporal
+
+#  # Milvus dependencies
+#  etcd:
+#    image: quay.m.daocloud.io/coreos/etcd:v3.5.5
+#    environment:
+#      - ETCD_AUTO_COMPACTION_MODE=revision
+#      - ETCD_AUTO_COMPACTION_RETENTION=1000
+#      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+#      - ETCD_SNAPSHOT_COUNT=50000
+#    volumes:
+#      - etcd-data:/etcd
+#    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+#
+#  minio:
+#    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+#    environment:
+#      - MINIO_ACCESS_KEY=minioadmin
+#      - MINIO_SECRET_KEY=minioadmin
+#    volumes:
+#      - minio-data:/data
+#    command: minio server /data
+#    ports:
+#      - "9000:9000"
+#      - "9001:9001"
+#
+#  # Milvus (Vector Database)
+#  milvus:
+#    image: milvusdb/milvus:v2.3.2
+#    command: ["milvus", "run", "standalone"]
+#    environment:
+#      ETCD_ENDPOINTS: etcd:2379
+#      MINIO_ADDRESS: minio:9000
+#    volumes:
+#      - milvus-data:/var/lib/milvus
+#    ports:
+#      - "19530:19530"
+#      - "9091:9091"
+#    depends_on:
+#      - etcd
+#      - minio
+
+volumes:
+  postgres-data:
+#  etcd-data:
+#  minio-data:
+#  milvus-data:

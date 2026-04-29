@@ -1,0 +1,8 @@
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://huecker.io",
+    "https://dockerpull.com",
+    "https://docker.mirrors.sjtug.bj.tsinghua.edu.cn"
+  ]
+}
