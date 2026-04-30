@@ -27,9 +27,9 @@ description: "基于设计制品生成的开发任务列表"
 - [x] T007 在 Postgres 中创建 Pipeline, Stage, CheckpointFeedback 数据表迁移脚本
 - [x] T008 [P] 在 Java 控制平面 `control-plane/src/main/java/.../model/` 中建立对应的实体类 (Pipeline, Stage)
 - [x] T009 [P] 在 Python 执行平面 `execution-plane/src/graph/` 中定义 `DevFlowState` TypedDict
-- [ ] T010 [P] 在 Java 控制平面 `control-plane/src/main/java/.../api/` 中建立流水线管理 REST API 的骨架 (Controller)
-- [ ] T011 [P] 在 Node Daemon `sandbox/daemon/` 中建立接收修改请求的 API 端点骨架
-- [ ] T012 定义 Temporal Workflow 接口 `DevFlowWorkflow` 及各个 Activity 的接口契约于 `control-plane/src/main/java/.../workflow/`
+- [x] T010 [P] 在 Java 控制平面 `control-plane/src/main/java/.../api/` 中建立流水线管理 REST API 的骨架 (Controller)
+- [x] T011 [P] 在 Node Daemon `sandbox/daemon/` 中建立接收修改请求的 API 端点骨架
+- [x] T012 定义 Temporal Workflow 接口 `DevFlowWorkflow` 及各个 Activity 的接口契约于 `control-plane/src/main/java/.../workflow/`
 
 ---
 
