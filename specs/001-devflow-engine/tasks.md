@@ -25,8 +25,8 @@ description: "基于设计制品生成的开发任务列表"
 **目标**: 建立核心实体模型，数据库迁移脚本和 API 契约骨架，阻断后续并行开发
 
 - [x] T007 在 Postgres 中创建 Pipeline, Stage, CheckpointFeedback 数据表迁移脚本
-- [ ] T008 [P] 在 Java 控制平面 `control-plane/src/main/java/.../model/` 中建立对应的实体类 (Pipeline, Stage)
-- [ ] T009 [P] 在 Python 执行平面 `execution-plane/src/graph/` 中定义 `DevFlowState` TypedDict
+- [x] T008 [P] 在 Java 控制平面 `control-plane/src/main/java/.../model/` 中建立对应的实体类 (Pipeline, Stage)
+- [x] T009 [P] 在 Python 执行平面 `execution-plane/src/graph/` 中定义 `DevFlowState` TypedDict
 - [ ] T010 [P] 在 Java 控制平面 `control-plane/src/main/java/.../api/` 中建立流水线管理 REST API 的骨架 (Controller)
 - [ ] T011 [P] 在 Node Daemon `sandbox/daemon/` 中建立接收修改请求的 API 端点骨架
 - [ ] T012 定义 Temporal Workflow 接口 `DevFlowWorkflow` 及各个 Activity 的接口契约于 `control-plane/src/main/java/.../workflow/`
