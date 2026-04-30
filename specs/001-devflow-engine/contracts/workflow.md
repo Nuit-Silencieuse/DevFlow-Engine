@@ -1,6 +1,6 @@
 # Temporal Workflow 契约设计
 
-本文档描述 T012 定义的 Temporal Workflow 与 Activity 接口契约。当前阶段只定义接口边界，不实现具体编排逻辑；实现类将在 T013-T014 中补齐。
+本文档描述 Temporal Workflow 与 Activity 接口契约。T012 定义接口边界；T013-T014 已补齐 `DevFlowWorkflowImpl`，实现前三个核心阶段编排和人工审批 Signal 处理。
 
 ## Workflow 接口
 
@@ -43,6 +43,32 @@
 - 输出: `WorkflowStatusSnapshot`
 - 作用: 查询当前 Workflow 快照，供 API 层或调试工具读取。
 
+## Workflow 实现
+
+实现位置:
+
+`control-plane/devflow-engine/src/main/java/com/devflow/engine/workflow/DevFlowWorkflowImpl.java`
+
+当前 T013-T014 行为:
+
+1. `start` 初始化状态为 `RUNNING`，默认执行阶段为 `REQUIREMENT_ANALYSIS -> SYSTEM_DESIGN -> CODE_GENERATION`。
+2. `REQUIREMENT_ANALYSIS` 调用 `DevFlowActivities.analyzeRequirement`。
+3. `SYSTEM_DESIGN` 调用 `DevFlowActivities.designSystem`，完成后将 Workflow 快照置为 `SUSPENDED` 并等待人工检查点 Signal。
+4. 收到 `APPROVE` 后继续执行 `CODE_GENERATION`。
+5. 收到 `REJECT` 后记录驳回结果，把 `human_feedback` 和 `rejected_stage` 注入 `globalContext`，重新执行 `SYSTEM_DESIGN`，然后再次等待审批。
+6. `CODE_GENERATION` 调用 `DevFlowActivities.generateCode`。
+7. 全部阶段完成后返回 `DevFlowWorkflowResult(status=COMPLETED)`，`getStatus` 返回同样的最终快照。
+
+当前实现同时支持 `TEST_GENERATION`、`CODE_REVIEW`、`DELIVERY_INTEGRATION` 的 Activity 分发；这些阶段的执行平面实际能力将在 T016 之后逐步补齐。
+
+Temporal 配置:
+
+| 项 | 值 |
+|----|----|
+| Task Queue | `DEVFLOW_TASK_QUEUE` |
+| Workflow ID | `devflow-pipeline-{pipelineId}` |
+| Temporal Target | `application.yml` 中的 `temporal.target`，默认 `localhost:7233` |
+
 ## Activity 接口
 
 接口位置:
@@ -63,4 +89,4 @@
 ## TDD 约束
 
 - `DevFlowWorkflowContractTest` 通过反射检查 Workflow、Signal、Query 和 Activity 注解，防止后续实现破坏 Temporal 契约。
-- T013-T014 增加 Workflow 实现前，应先补充 Workflow 行为测试，再实现编排和 Signal 处理。
+- `DevFlowWorkflowImplTest` 先定义行为红灯，再实现编排和 Signal 处理，覆盖批准继续执行、驳回后注入反馈并重跑设计阶段。

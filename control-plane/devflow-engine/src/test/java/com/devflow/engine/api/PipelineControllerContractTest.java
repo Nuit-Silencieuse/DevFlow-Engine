@@ -2,14 +2,22 @@ package com.devflow.engine.api;
 
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.blankOrNullString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.devflow.engine.service.PipelineService;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -18,8 +26,15 @@ class PipelineControllerContractTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @MockBean
+    private PipelineService pipelineService;
+
     @Test
     void createPipelineAcceptsContractRequest() throws Exception {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000101");
+        when(pipelineService.createPipeline(any(CreatePipelineRequest.class)))
+            .thenReturn(new CreatePipelineResponse(pipelineId, "RUNNING"));
+
         mockMvc.perform(post("/api/v1/pipelines")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
@@ -35,15 +50,31 @@ class PipelineControllerContractTest {
     }
 
     @Test
-    void getPipelineRouteExistsBeforeBusinessLogicIsImplemented() throws Exception {
-        mockMvc.perform(get("/api/v1/pipelines/00000000-0000-0000-0000-000000000001"))
-            .andExpect(status().isNotImplemented())
-            .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"));
+    void getPipelineReturnsPersistedStatus() throws Exception {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        when(pipelineService.getPipeline(pipelineId))
+            .thenReturn(new PipelineStatusResponse(
+                pipelineId,
+                "RUNNING",
+                "SYSTEM_DESIGN",
+                List.of(new StageStatusResponse("SYSTEM_DESIGN", "PENDING", true, Map.of()))
+            ));
+
+        mockMvc.perform(get("/api/v1/pipelines/{id}", pipelineId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.pipelineId").value(pipelineId.toString()))
+            .andExpect(jsonPath("$.status").value("RUNNING"))
+            .andExpect(jsonPath("$.currentStage").value("SYSTEM_DESIGN"))
+            .andExpect(jsonPath("$.stages[0].name").value("SYSTEM_DESIGN"));
     }
 
     @Test
-    void checkpointRouteExistsBeforeSignalHandlingIsImplemented() throws Exception {
-        mockMvc.perform(post("/api/v1/pipelines/00000000-0000-0000-0000-000000000001/checkpoints/SYSTEM_DESIGN")
+    void checkpointRouteSendsSignalAndReturnsAcceptedDecision() throws Exception {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        when(pipelineService.submitCheckpointDecision(any(UUID.class), any(String.class), any(CheckpointDecisionRequest.class)))
+            .thenReturn(new CheckpointDecisionResponse("RUNNING", "Signal received. Pipeline resuming or re-routing."));
+
+        mockMvc.perform(post("/api/v1/pipelines/{id}/checkpoints/{stageName}", pipelineId, "SYSTEM_DESIGN")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {
@@ -51,7 +82,10 @@ class PipelineControllerContractTest {
                       "feedback": "Add database schema details."
                     }
                     """))
-            .andExpect(status().isNotImplemented())
-            .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"));
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("RUNNING"))
+            .andExpect(jsonPath("$.message").value("Signal received. Pipeline resuming or re-routing."));
+
+        verify(pipelineService).submitCheckpointDecision(any(UUID.class), any(String.class), any(CheckpointDecisionRequest.class));
     }
 }

@@ -26,8 +26,10 @@ mvn "-Dmaven.repo.local=C:\Users\12252\.m2\repository" test
 
 当前测试覆盖:
 
-- `PipelineControllerContractTest`: 验证流水线 REST API 骨架。
+- `PipelineControllerContractTest`: 验证流水线 REST API 创建、查询和人工检查点响应。
+- `PipelineServiceTest`: 验证流水线持久化、阶段初始化、Temporal Workflow 启动和 Signal 转发。
 - `DevFlowWorkflowContractTest`: 验证 Temporal Workflow 与 Activity 接口注解契约。
+- `DevFlowWorkflowImplTest`: 验证 Workflow 编排、批准继续执行、驳回后注入反馈并重跑设计阶段。
 
 ## 控制平面启动验证
 
@@ -40,6 +42,41 @@ mvn "-Dmaven.repo.local=C:\Users\12252\.m2\repository" "-DskipTests" "-Dspring-b
 - Flyway 校验 `devflow_app` schema 已是最新。
 - Hibernate 成功初始化实体映射。
 - 应用启动后正常退出。
+
+## 控制平面 API 验证
+
+在 WSL Docker 中启动 Postgres 和 Temporal 后，可以启动控制平面 Web 服务:
+
+```powershell
+mvn "-Dmaven.repo.local=C:\Users\12252\.m2\repository" spring-boot:run
+```
+
+创建流水线:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/pipelines" -ContentType "application/json" -Body '{
+  "name": "Add user authentication",
+  "requirement": "实现用户登录、注册和鉴权",
+  "stages": ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"]
+}'
+```
+
+查询流水线:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri "http://localhost:8080/api/v1/pipelines/{pipelineId}"
+```
+
+提交人工检查点:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/pipelines/{pipelineId}/checkpoints/SYSTEM_DESIGN" -ContentType "application/json" -Body '{
+  "decision": "APPROVE",
+  "feedback": ""
+}'
+```
+
+注意: T016 之前执行平面的 Temporal Worker 尚未实现，因此 Workflow 可以被创建和接收 Signal，但实际 Activity 执行需要后续 Worker 注册后才会完整推进。
 
 ## 本地 Daemon 测试
 

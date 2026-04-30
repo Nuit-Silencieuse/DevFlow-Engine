@@ -40,9 +40,9 @@ description: "基于设计制品生成的开发任务列表"
 **独立测试**: 能够启动流水线，并在人工驳回时正确回退或恢复流程。
 
 ### 核心调度与控制平面实现
-- [ ] T013 [US1] 在 Java 控制平面实现 `DevFlowWorkflowImpl`，编排 RequirementAnalysis, SystemDesign, CodeGeneration 活动
-- [ ] T014 [US1] 在 Java 控制平面实现人工审批（Approve/Reject）的 Signal 处理逻辑
-- [ ] T015 [US1] 实现创建流水线和查询状态的 API 端点逻辑 (`control-plane/.../api/PipelineController.java`)
+- [x] T013 [US1] 在 Java 控制平面实现 `DevFlowWorkflowImpl`，编排 RequirementAnalysis, SystemDesign, CodeGeneration 活动
+- [x] T014 [US1] 在 Java 控制平面实现人工审批（Approve/Reject）的 Signal 处理逻辑
+- [x] T015 [US1] 实现创建流水线和查询状态的 API 端点逻辑 (`control-plane/.../api/PipelineController.java`)
 
 ### 执行平面与 Agent 拓扑实现
 - [ ] T016 [P] [US1] 在 Python 执行平面实现 Temporal Worker 并注册 Activities (`execution-plane/src/workers/`)

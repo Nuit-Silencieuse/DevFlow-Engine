@@ -1,6 +1,6 @@
 # API 契约设计
 
-本文档描述 DevFlow Engine 当前阶段暴露的 HTTP API 契约。T010 和 T011 只交付接口骨架与请求/响应形状，真正的持久化、Temporal 调度、AST 定位、代码生成和文件写入会在后续任务中接入。
+本文档描述 DevFlow Engine 当前阶段暴露的 HTTP API 契约。T015 已将控制平面的流水线创建和查询接入 JPA 持久化，并通过 Temporal Gateway 启动 Workflow；T014 已将人工检查点决策转发为 Temporal Signal。AST 定位、代码生成和文件写入仍由后续任务接入。
 
 ## 控制平面 API
 
@@ -10,7 +10,7 @@
 
 - 方法: `POST`
 - 路径: `/api/v1/pipelines`
-- 当前阶段: 已提供控制器骨架，返回模拟的 `pipelineId` 和 `RUNNING` 状态；T015 会接入数据库和 Temporal Workflow。
+- 当前阶段: 已实现业务逻辑。接口会创建 `Pipeline` 记录、初始化阶段列表、写入 `global_context`，并通过 `TemporalPipelineGateway` 启动对应 Workflow。
 
 请求体:
 
@@ -38,22 +38,27 @@
 }
 ```
 
+创建后的持久化约定:
+
+| 字段 | 当前写入规则 |
+|------|--------------|
+| `Pipeline.status` | `RUNNING` |
+| `Pipeline.current_stage` | 请求阶段列表的第一个阶段，默认 `REQUIREMENT_ANALYSIS` |
+| `Pipeline.global_context.original_requirement` | 原始需求文本 |
+| `Pipeline.global_context.requested_stages` | 本次请求的阶段顺序 |
+| `Stage.requires_human_approval` | `SYSTEM_DESIGN` 为 `true`，其他默认 `false` |
+
+Temporal Workflow ID 约定:
+
+`devflow-pipeline-{pipelineId}`
+
 ### 查询流水线状态
 
 - 方法: `GET`
 - 路径: `/api/v1/pipelines/{id}`
-- 当前阶段: 路由已存在，但业务查询尚未实现；T015 会返回真实状态和阶段输出。
+- 当前阶段: 已实现业务查询。接口从数据库读取流水线和阶段快照，按 `requested_stages` 顺序返回阶段状态。
 
-当前响应 `501 Not Implemented`:
-
-```json
-{
-  "code": "NOT_IMPLEMENTED",
-  "message": "流水线状态查询将在 T015 接入持久化和调度逻辑后实现。"
-}
-```
-
-目标响应 `200 OK`:
+响应 `200 OK`:
 
 ```json
 {
@@ -63,15 +68,26 @@
   "stages": [
     {
       "name": "REQUIREMENT_ANALYSIS",
-      "status": "COMPLETED",
+      "status": "PENDING",
+      "requiresHumanApproval": false,
       "output": {}
     },
     {
       "name": "SYSTEM_DESIGN",
-      "status": "PENDING_APPROVAL",
+      "status": "PENDING",
+      "requiresHumanApproval": true,
       "output": {}
     }
   ]
+}
+```
+
+未找到响应 `404 Not Found`:
+
+```json
+{
+  "code": "NOT_FOUND",
+  "message": "Pipeline not found: uuid-string"
 }
 ```
 
@@ -79,7 +95,7 @@
 
 - 方法: `POST`
 - 路径: `/api/v1/pipelines/{id}/checkpoints/{stageName}`
-- 当前阶段: 路由已存在，但尚未发送 Temporal Signal；T014 会接入批准/驳回后的 Workflow 继续执行或回退逻辑。
+- 当前阶段: 已实现 Signal 转发。接口验证流水线存在后，将 `APPROVE` 映射到 `approveCheckpoint`，将 `REJECT` 映射到 `rejectCheckpoint`。
 
 请求体:
 
@@ -90,21 +106,21 @@
 }
 ```
 
-当前响应 `501 Not Implemented`:
-
-```json
-{
-  "code": "NOT_IMPLEMENTED",
-  "message": "Checkpoint signal handling will be implemented in T014."
-}
-```
-
-目标响应 `200 OK`:
+响应 `200 OK`:
 
 ```json
 {
   "status": "RUNNING",
   "message": "Signal received. Pipeline resuming or re-routing."
+}
+```
+
+非法决策响应 `400 Bad Request`:
+
+```json
+{
+  "code": "INVALID_REQUEST",
+  "message": "Checkpoint decision must be APPROVE or REJECT."
 }
 ```
 
@@ -149,6 +165,7 @@
 
 ## 测试约束
 
-- Java 控制器骨架由 `PipelineControllerContractTest` 保护路由和响应形状。
+- Java API 由 `PipelineControllerContractTest` 保护路由和响应形状。
+- 流水线创建、查询、Signal 转发由 `PipelineServiceTest` 保护业务契约。
 - Node Daemon 骨架由 `src/api.test.ts` 保护接收请求和非法请求处理。
 - 后续任务实现业务逻辑时必须先扩展这些契约测试，再改实现。
