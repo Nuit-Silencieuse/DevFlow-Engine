@@ -2,6 +2,10 @@
 
 本文档记录当前阶段可执行的启动、测试和验证命令。项目采用“先写测试，再补实现”的 TDD 范式；新增接口或行为时，应先增加失败的契约测试，再实现代码并让测试转绿。
 
+控制平面的结构、核心类字段和复杂方法流程见 [control-plane-architecture.md](./control-plane-architecture.md)。
+执行平面的结构、LangGraph 实现和 Worker 说明见 [execution-plane-architecture.md](./execution-plane-architecture.md)。
+T018-T023 的 Agent 职责、输入输出和验收要求见 [agent-design.md](./agent-design.md)。
+
 ## 基础设施
 
 基础设施运行在 WSL Docker 容器中。
@@ -101,6 +105,39 @@ npm.cmd start
 默认监听地址:
 
 `http://localhost:8080`
+
+## 执行平面测试
+
+Python 执行平面位于 `execution-plane`。当前本地虚拟环境为 Python 3.10，可直接运行:
+
+```powershell
+.\venv\python.exe -m unittest discover -s tests
+```
+
+当前测试覆盖:
+
+- `tests/test_flow.py`: 验证 LangGraph 六阶段拓扑和人工反馈注入。
+- `tests/test_worker.py`: 验证 Temporal Activity 注册名与 Java 契约一致，并验证 Activity 返回 `StageExecutionResult` 形状。
+
+执行平面依赖记录在:
+
+`execution-plane/requirements.txt`
+
+连接基础设施:
+
+```powershell
+.\venv\python.exe test_connection.py
+```
+
+启动 Python Temporal Activity Worker:
+
+```powershell
+.\venv\python.exe -m src.workers.worker
+```
+
+Worker 默认连接 `localhost:7233`，可通过 `TEMPORAL_TARGET` 覆盖；注册的 Task Queue 为 `DEVFLOW_TASK_QUEUE`。
+
+注意: 当前 Python Worker 注册的是 Activity Worker。Java `DevFlowWorkflowImpl` 仍需要控制平面侧 Workflow Worker 承载后，真实 Temporal 流水线才能完整推进。
 
 ## 数据库验证
 

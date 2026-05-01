@@ -45,8 +45,8 @@ description: "基于设计制品生成的开发任务列表"
 - [x] T015 [US1] 实现创建流水线和查询状态的 API 端点逻辑 (`control-plane/.../api/PipelineController.java`)
 
 ### 执行平面与 Agent 拓扑实现
-- [ ] T016 [P] [US1] 在 Python 执行平面实现 Temporal Worker 并注册 Activities (`execution-plane/src/workers/`)
-- [ ] T017 [US1] 在 Python 执行平面使用 LangGraph 构建端到端的状态图拓扑 (`execution-plane/src/graph/flow.py`)
+- [x] T016 [P] [US1] 在 Python 执行平面实现 Temporal Worker 并注册 Activities (`execution-plane/src/workers/`)
+- [x] T017 [US1] 在 Python 执行平面使用 LangGraph 构建端到端的状态图拓扑 (`execution-plane/src/graph/flow.py`)
 - [ ] T018 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
 - [ ] T019 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
 - [ ] T020 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)

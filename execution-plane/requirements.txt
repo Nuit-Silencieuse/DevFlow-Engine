@@ -1,0 +1,4 @@
+fastapi
+langgraph
+psycopg2-binary
+temporalio

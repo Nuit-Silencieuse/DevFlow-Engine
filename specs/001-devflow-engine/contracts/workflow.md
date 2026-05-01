@@ -75,6 +75,10 @@ Temporal 配置:
 
 `control-plane/devflow-engine/src/main/java/com/devflow/engine/workflow/DevFlowActivities.java`
 
+Python 执行平面实现位置:
+
+`execution-plane/src/workers/activities.py`
+
 每个 Activity 都接收 `StageExecutionRequest`，返回 `StageExecutionResult`。
 
 | 方法 | 阶段 |
@@ -86,7 +90,56 @@ Temporal 配置:
 | `reviewCode` | 代码评审 |
 | `integrateDelivery` | 交付集成 |
 
+T016 已在 Python Worker 中注册与 Java 方法名一致的 Activity Type:
+
+| Java Activity Type | Python 函数 | 输出字段 |
+|--------------------|-------------|----------|
+| `analyzeRequirement` | `analyze_requirement` | `stageName`, `status`, `outputPayload.structured_prd` |
+| `designSystem` | `design_system` | `stageName`, `status`, `outputPayload.design_doc` |
+| `generateCode` | `generate_code` | `stageName`, `status`, `outputPayload.diff_patch` |
+| `generateTests` | `generate_tests` | `stageName`, `status`, `outputPayload.test_results` |
+| `reviewCode` | `review_code` | `stageName`, `status`, `outputPayload.review_report` |
+| `integrateDelivery` | `integrate_delivery` | `stageName`, `status`, `outputPayload.delivery_status` |
+
+Worker 入口:
+
+`execution-plane/src/workers/worker.py`
+
+运行约定:
+
+| 项 | 值 |
+|----|----|
+| Task Queue | `DEVFLOW_TASK_QUEUE` |
+| Temporal Target | 环境变量 `TEMPORAL_TARGET`，默认 `localhost:7233` |
+
+## LangGraph 拓扑
+
+实现位置:
+
+`execution-plane/src/graph/flow.py`
+
+T017 已建立执行平面状态图拓扑:
+
+```text
+REQUIREMENT_ANALYSIS
+  -> SYSTEM_DESIGN
+  -> CODE_GENERATION
+  -> TEST_GENERATION
+  -> CODE_REVIEW
+  -> DELIVERY_INTEGRATION
+  -> END
+```
+
+当前节点实现是稳定的占位逻辑，用于打通 Temporal Activity 到 LangGraph 状态流转的契约；T018-T023 会逐步替换为真实 Agent 节点。
+
+人工驳回反馈约定:
+
+- 控制平面驳回时会把 `human_feedback` 放入 `globalContext`。
+- Python `designSystem` Activity 会把该字段合并进 `DevFlowState`，并写入 `design_doc.feedback`。
+
 ## TDD 约束
 
 - `DevFlowWorkflowContractTest` 通过反射检查 Workflow、Signal、Query 和 Activity 注解，防止后续实现破坏 Temporal 契约。
 - `DevFlowWorkflowImplTest` 先定义行为红灯，再实现编排和 Signal 处理，覆盖批准继续执行、驳回后注入反馈并重跑设计阶段。
+- `execution-plane/tests/test_worker.py` 验证 Python Worker 注册的 Activity Type 与 Java 契约一致，并验证返回 `StageExecutionResult` 形状。
+- `execution-plane/tests/test_flow.py` 验证 LangGraph 六阶段拓扑和人工反馈注入。
