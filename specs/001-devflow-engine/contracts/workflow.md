@@ -130,7 +130,7 @@ REQUIREMENT_ANALYSIS
   -> END
 ```
 
-当前节点实现是稳定的占位逻辑，用于打通 Temporal Activity 到 LangGraph 状态流转的契约；T018-T023 会逐步替换为真实 Agent 节点。
+当前节点实现是稳定的占位逻辑，用于打通 Temporal Activity 到 LangGraph 状态流转的契约；T018-T020 会先补齐代码感知和阶段产物展示基础能力，T021-T026 会逐步替换为真实 Agent 节点。
 
 人工驳回反馈约定:
 

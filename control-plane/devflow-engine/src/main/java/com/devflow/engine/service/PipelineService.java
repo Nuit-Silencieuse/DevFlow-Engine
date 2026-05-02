@@ -5,6 +5,7 @@ import com.devflow.engine.api.CheckpointDecisionResponse;
 import com.devflow.engine.api.CreatePipelineRequest;
 import com.devflow.engine.api.CreatePipelineResponse;
 import com.devflow.engine.api.PipelineStatusResponse;
+import com.devflow.engine.api.RepositoryContext;
 import com.devflow.engine.api.StageStatusResponse;
 import com.devflow.engine.model.Pipeline;
 import com.devflow.engine.model.PipelineStatus;
@@ -23,6 +24,9 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class PipelineService {
+    private static final int DEFAULT_MAX_FILES = 200;
+    private static final long DEFAULT_MAX_BYTES = 1_048_576L;
+
     private static final List<String> DEFAULT_STAGES = List.of(
         "REQUIREMENT_ANALYSIS",
         "SYSTEM_DESIGN",
@@ -41,12 +45,13 @@ public class PipelineService {
     public CreatePipelineResponse createPipeline(CreatePipelineRequest request) {
         validateCreateRequest(request);
         List<String> requestedStages = normalizeStages(request.stages());
+        RepositoryContext repository = normalizeRepository(request.repository());
 
         Pipeline pipeline = new Pipeline(request.name());
         pipeline.setId(UUID.randomUUID());
         pipeline.setStatus(PipelineStatus.RUNNING);
         pipeline.setCurrentStage(requestedStages.get(0));
-        pipeline.setGlobalContext(createGlobalContext(request.requirement(), requestedStages));
+        pipeline.setGlobalContext(createGlobalContext(request.requirement(), requestedStages, repository));
         requestedStages.forEach(stageName -> pipeline.addStage(createStage(stageName)));
 
         Pipeline saved = pipelineRepository.save(pipeline);
@@ -84,6 +89,7 @@ public class PipelineService {
             pipeline.getId(),
             pipeline.getStatus().name(),
             pipeline.getCurrentStage(),
+            readRepositoryContext(pipeline),
             stages
         );
     }
@@ -128,11 +134,71 @@ public class PipelineService {
         return normalized;
     }
 
-    private static Map<String, Object> createGlobalContext(String requirement, List<String> stages) {
+    private static Map<String, Object> createGlobalContext(
+        String requirement,
+        List<String> stages,
+        RepositoryContext repository
+    ) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("original_requirement", requirement);
         context.put("requested_stages", stages);
+        if (repository != null) {
+            context.put("repository", repositoryToMap(repository));
+        }
         return context;
+    }
+
+    private static RepositoryContext normalizeRepository(RepositoryContext repository) {
+        if (repository == null) {
+            return null;
+        }
+        if (!StringUtils.hasText(repository.rootPath())) {
+            throw new IllegalArgumentException("Repository rootPath is required when repository context is provided.");
+        }
+        return new RepositoryContext(
+            repository.rootPath().trim(),
+            normalizePathList(repository.includePaths()),
+            normalizePathList(repository.excludePaths()),
+            normalizePathList(repository.targetFiles()),
+            repository.maxFiles() == null || repository.maxFiles() <= 0 ? DEFAULT_MAX_FILES : repository.maxFiles(),
+            repository.maxBytes() == null || repository.maxBytes() <= 0 ? DEFAULT_MAX_BYTES : repository.maxBytes()
+        );
+    }
+
+    private static List<String> normalizePathList(List<String> paths) {
+        if (paths == null || paths.isEmpty()) {
+            return List.of();
+        }
+        return paths.stream()
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .toList();
+    }
+
+    private static Map<String, Object> repositoryToMap(RepositoryContext repository) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("rootPath", repository.rootPath());
+        value.put("includePaths", repository.includePaths());
+        value.put("excludePaths", repository.excludePaths());
+        value.put("targetFiles", repository.targetFiles());
+        value.put("maxFiles", repository.maxFiles());
+        value.put("maxBytes", repository.maxBytes());
+        return value;
+    }
+
+    private static RepositoryContext readRepositoryContext(Pipeline pipeline) {
+        Object value = pipeline.getGlobalContext().get("repository");
+        if (!(value instanceof Map<?, ?> repository)) {
+            return null;
+        }
+        return new RepositoryContext(
+            stringValue(repository.get("rootPath")),
+            stringList(repository.get("includePaths")),
+            stringList(repository.get("excludePaths")),
+            stringList(repository.get("targetFiles")),
+            intValue(repository.get("maxFiles")),
+            longValue(repository.get("maxBytes"))
+        );
     }
 
     @SuppressWarnings("unchecked")
@@ -147,6 +213,37 @@ public class PipelineService {
     private static int stageOrder(List<String> requestedOrder, String stageName) {
         int index = requestedOrder.indexOf(stageName);
         return index >= 0 ? index : Integer.MAX_VALUE;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return List.of();
+    }
+
+    private static Integer intValue(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        return Integer.valueOf(String.valueOf(value));
+    }
+
+    private static Long longValue(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        return Long.valueOf(String.valueOf(value));
     }
 
     private static CheckpointDecision parseDecision(String value) {

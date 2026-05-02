@@ -10,7 +10,7 @@
 
 - 方法: `POST`
 - 路径: `/api/v1/pipelines`
-- 当前阶段: 已实现业务逻辑。接口会创建 `Pipeline` 记录、初始化阶段列表、写入 `global_context`，并通过 `TemporalPipelineGateway` 启动对应 Workflow。
+- 当前阶段: 已实现业务逻辑。接口会创建 `Pipeline` 记录、初始化阶段列表、写入 `global_context`，并通过 `TemporalPipelineGateway` 启动对应 Workflow。T018 已支持 `repository` 代码库上下文，并会写入 `Pipeline.global_context.repository` 后透传给 Workflow。
 
 请求体:
 
@@ -25,7 +25,15 @@
     "TEST_GENERATION",
     "CODE_REVIEW",
     "DELIVERY_INTEGRATION"
-  ]
+  ],
+  "repository": {
+    "rootPath": "D:/projects/demo-app",
+    "includePaths": ["src", "README.md"],
+    "excludePaths": ["node_modules", "dist", ".git"],
+    "targetFiles": ["src/App.tsx"],
+    "maxFiles": 50,
+    "maxBytes": 65536
+  }
 }
 ```
 
@@ -46,7 +54,19 @@
 | `Pipeline.current_stage` | 请求阶段列表的第一个阶段，默认 `REQUIREMENT_ANALYSIS` |
 | `Pipeline.global_context.original_requirement` | 原始需求文本 |
 | `Pipeline.global_context.requested_stages` | 本次请求的阶段顺序 |
+| `Pipeline.global_context.repository` | 代码库上下文，包含 `rootPath/includePaths/excludePaths/targetFiles/maxFiles/maxBytes` |
 | `Stage.requires_human_approval` | `SYSTEM_DESIGN` 为 `true`，其他默认 `false` |
+
+`repository` 规则:
+
+| 字段 | 规则 |
+|------|------|
+| `rootPath` | 提供 `repository` 时必填；控制平面仅保存和透传，不读取文件系统 |
+| `includePaths` | 可选，空值会规范化为空列表 |
+| `excludePaths` | 可选，空值会规范化为空列表 |
+| `targetFiles` | 可选，空值会规范化为空列表 |
+| `maxFiles` | 可选，未提供或小于等于 0 时默认为 `200` |
+| `maxBytes` | 可选，未提供或小于等于 0 时默认为 `1048576` |
 
 Temporal Workflow ID 约定:
 
@@ -65,6 +85,14 @@ Temporal Workflow ID 约定:
   "pipelineId": "uuid-string",
   "status": "SUSPENDED",
   "currentStage": "SYSTEM_DESIGN",
+  "repository": {
+    "rootPath": "D:/projects/demo-app",
+    "includePaths": ["src", "README.md"],
+    "excludePaths": ["node_modules", "dist", ".git"],
+    "targetFiles": ["src/App.tsx"],
+    "maxFiles": 50,
+    "maxBytes": 65536
+  },
   "stages": [
     {
       "name": "REQUIREMENT_ANALYSIS",
@@ -167,5 +195,6 @@ Temporal Workflow ID 约定:
 
 - Java API 由 `PipelineControllerContractTest` 保护路由和响应形状。
 - 流水线创建、查询、Signal 转发由 `PipelineServiceTest` 保护业务契约。
+- `repository` 上下文的 JSON 反序列化、`global_context` 写入和状态查询回显由 Java 测试覆盖。
 - Node Daemon 骨架由 `src/api.test.ts` 保护接收请求和非法请求处理。
 - 后续任务实现业务逻辑时必须先扩展这些契约测试，再改实现。

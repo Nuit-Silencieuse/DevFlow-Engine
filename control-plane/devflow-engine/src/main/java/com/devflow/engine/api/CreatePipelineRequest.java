@@ -5,6 +5,7 @@ import java.util.List;
 public record CreatePipelineRequest(
     String name,
     String requirement,
-    List<String> stages
+    List<String> stages,
+    RepositoryContext repository
 ) {
 }

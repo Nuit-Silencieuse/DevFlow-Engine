@@ -95,11 +95,13 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 | `CreatePipelineRequest` | `name` | 流水线名称 |
 | `CreatePipelineRequest` | `requirement` | 原始需求文本 |
 | `CreatePipelineRequest` | `stages` | 期望执行的阶段列表；为空时使用默认三阶段 |
+| `CreatePipelineRequest` | `repository` | T018 新增代码库上下文；用于后续 Agent 路径驱动代码感知 |
 | `CreatePipelineResponse` | `pipelineId` | 新建流水线 UUID |
 | `CreatePipelineResponse` | `status` | 创建后的流水线状态，当前为 `RUNNING` |
 | `PipelineStatusResponse` | `pipelineId` | 流水线 UUID |
 | `PipelineStatusResponse` | `status` | 流水线状态 |
 | `PipelineStatusResponse` | `currentStage` | 当前阶段名 |
+| `PipelineStatusResponse` | `repository` | 创建时保存的代码库上下文，供 UI 展示和执行平面调试 |
 | `PipelineStatusResponse` | `stages` | 阶段状态列表 |
 | `StageStatusResponse` | `name` | 阶段名 |
 | `StageStatusResponse` | `status` | 阶段状态 |
@@ -111,6 +113,23 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 | `CheckpointDecisionResponse` | `message` | 人类可读消息 |
 | `ErrorResponse` | `code` | 错误码 |
 | `ErrorResponse` | `message` | 错误说明 |
+
+### `RepositoryContext`
+
+`RepositoryContext` 是 T018 新增的代码库上下文 DTO，控制平面只做校验、规范化和持久化，不直接读取目标代码库。
+
+| 字段 | 含义 |
+|------|------|
+| `rootPath` | 目标仓库根目录；提供 `repository` 时必填 |
+| `includePaths` | Agent 可探索的相对目录或文件 |
+| `excludePaths` | Agent 必须跳过的目录或文件，如 `.git`、依赖目录、构建产物 |
+| `targetFiles` | 用户明确指定的重点文件 |
+| `maxFiles` | 单阶段最多读取或打包的文件数；默认 `200` |
+| `maxBytes` | 单阶段最多打包的文本字节数；默认 `1048576` |
+ 
+持久化位置:
+
+`Pipeline.globalContext.repository`
 
 ## 数据模型层
 
@@ -227,6 +246,7 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
    - 设置 globalContext:
      - original_requirement = request.requirement
      - requested_stages = 阶段顺序
+     - repository = 规范化后的代码库上下文
 
 4. 创建 Stage
    - 对每个阶段调用 createStage
@@ -310,7 +330,11 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 | `createStage` | 根据阶段名创建 `Stage`，并映射 Agent 角色 |
 | `validateCreateRequest` | 校验创建请求必填字段 |
 | `normalizeStages` | 清洗阶段列表并提供默认阶段 |
+| `normalizeRepository` | 校验并规范化代码库上下文，补齐默认 `maxFiles/maxBytes` |
+| `normalizePathList` | 清洗 include/exclude/target 路径列表 |
 | `createGlobalContext` | 构造写入 `Pipeline.globalContext` 的初始 JSON |
+| `repositoryToMap` | 将 `RepositoryContext` 转为 JSONB 可持久化的 Map |
+| `readRepositoryContext` | 从 `Pipeline.globalContext.repository` 还原查询响应 DTO |
 | `readRequestedStageOrder` | 从 JSON 上下文读取阶段顺序 |
 | `stageOrder` | 查询阶段排序权重 |
 | `parseDecision` | 把 API 字符串解析为 `CheckpointDecision` 枚举 |
@@ -673,7 +697,7 @@ temporal:
 
 - 控制平面侧 Temporal Workflow Worker 的启动和注册。
 - Workflow 状态与数据库 `Pipeline/Stage` 状态的同步。
-- T018-T023 真实 Agent 节点逻辑。
-- T024 LangGraph Checkpointer 与人工反馈回溯。
+- T018-T020 代码感知、上下文工具和阶段产物落库/展示基础能力。
+- T021-T026 真实 Agent 节点逻辑。
+- T027 LangGraph Checkpointer 与人工反馈回溯。
 - 失败重试、幂等和 outbox 等一致性增强。
-

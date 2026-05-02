@@ -7,6 +7,7 @@ public record PipelineStatusResponse(
     UUID pipelineId,
     String status,
     String currentStage,
+    RepositoryContext repository,
     List<StageStatusResponse> stages
 ) {
 }

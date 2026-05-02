@@ -2,6 +2,7 @@ package com.devflow.engine.api;
 
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.blankOrNullString;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -41,12 +43,30 @@ class PipelineControllerContractTest {
                     {
                       "name": "Add user authentication",
                       "requirement": "实现用户登录、注册和鉴权",
-                      "stages": ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"]
+                      "stages": ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"],
+                      "repository": {
+                        "rootPath": "D:/projects/demo-app",
+                        "includePaths": ["src", "README.md"],
+                        "excludePaths": ["node_modules", "dist", ".git"],
+                        "targetFiles": ["src/App.tsx"],
+                        "maxFiles": 50,
+                        "maxBytes": 65536
+                      }
                     }
                     """))
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.pipelineId", not(blankOrNullString())))
             .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        ArgumentCaptor<CreatePipelineRequest> requestCaptor = ArgumentCaptor.forClass(CreatePipelineRequest.class);
+        verify(pipelineService).createPipeline(requestCaptor.capture());
+        RepositoryContext repository = requestCaptor.getValue().repository();
+        assertThat(repository.rootPath()).isEqualTo("D:/projects/demo-app");
+        assertThat(repository.includePaths()).containsExactly("src", "README.md");
+        assertThat(repository.excludePaths()).containsExactly("node_modules", "dist", ".git");
+        assertThat(repository.targetFiles()).containsExactly("src/App.tsx");
+        assertThat(repository.maxFiles()).isEqualTo(50);
+        assertThat(repository.maxBytes()).isEqualTo(65_536L);
     }
 
     @Test
@@ -57,6 +77,14 @@ class PipelineControllerContractTest {
                 pipelineId,
                 "RUNNING",
                 "SYSTEM_DESIGN",
+                new RepositoryContext(
+                    "D:/projects/demo-app",
+                    List.of("src"),
+                    List.of("node_modules", ".git"),
+                    List.of("src/App.tsx"),
+                    50,
+                    65_536L
+                ),
                 List.of(new StageStatusResponse("SYSTEM_DESIGN", "PENDING", true, Map.of()))
             ));
 
@@ -65,6 +93,8 @@ class PipelineControllerContractTest {
             .andExpect(jsonPath("$.pipelineId").value(pipelineId.toString()))
             .andExpect(jsonPath("$.status").value("RUNNING"))
             .andExpect(jsonPath("$.currentStage").value("SYSTEM_DESIGN"))
+            .andExpect(jsonPath("$.repository.rootPath").value("D:/projects/demo-app"))
+            .andExpect(jsonPath("$.repository.targetFiles[0]").value("src/App.tsx"))
             .andExpect(jsonPath("$.stages[0].name").value("SYSTEM_DESIGN"));
     }
 

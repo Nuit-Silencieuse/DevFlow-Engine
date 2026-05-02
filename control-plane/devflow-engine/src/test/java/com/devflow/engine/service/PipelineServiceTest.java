@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.devflow.engine.api.CheckpointDecisionRequest;
 import com.devflow.engine.api.CreatePipelineRequest;
+import com.devflow.engine.api.RepositoryContext;
 import com.devflow.engine.model.Pipeline;
 import com.devflow.engine.model.PipelineStatus;
 import com.devflow.engine.model.StageStatus;
@@ -14,6 +15,7 @@ import com.devflow.engine.repository.PipelineRepository;
 import com.devflow.engine.workflow.CheckpointDecision;
 import com.devflow.engine.workflow.DevFlowWorkflowInput;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -41,7 +43,15 @@ class PipelineServiceTest {
         var response = pipelineService.createPipeline(new CreatePipelineRequest(
             "Add auth",
             "实现登录注册",
-            List.of("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION")
+            List.of("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"),
+            new RepositoryContext(
+                "D:/projects/demo-app",
+                List.of("src", "README.md"),
+                List.of("node_modules", "dist", ".git"),
+                List.of("src/App.tsx"),
+                50,
+                65_536L
+            )
         ));
 
         ArgumentCaptor<Pipeline> pipelineCaptor = ArgumentCaptor.forClass(Pipeline.class);
@@ -55,6 +65,11 @@ class PipelineServiceTest {
         assertThat(saved.getStatus()).isEqualTo(PipelineStatus.RUNNING);
         assertThat(saved.getCurrentStage()).isEqualTo("REQUIREMENT_ANALYSIS");
         assertThat(saved.getGlobalContext()).containsEntry("original_requirement", "实现登录注册");
+        assertThat(saved.getGlobalContext()).containsKey("repository");
+        assertThat(repositoryMap(saved.getGlobalContext().get("repository")))
+            .containsEntry("rootPath", "D:/projects/demo-app")
+            .containsEntry("maxFiles", 50)
+            .containsEntry("maxBytes", 65_536L);
         assertThat(saved.getStages()).extracting("name")
             .containsExactly("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION");
         assertThat(saved.getStages().get(1).isRequiresHumanApproval()).isTrue();
@@ -62,6 +77,8 @@ class PipelineServiceTest {
         DevFlowWorkflowInput workflowInput = workflowInputCaptor.getValue();
         assertThat(workflowInput.pipelineId()).isEqualTo(saved.getId());
         assertThat(workflowInput.stages()).containsExactly("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION");
+        assertThat(repositoryMap(workflowInput.globalContext().get("repository")))
+            .containsEntry("rootPath", "D:/projects/demo-app");
     }
 
     @Test
@@ -71,6 +88,17 @@ class PipelineServiceTest {
         pipeline.setId(pipelineId);
         pipeline.setStatus(PipelineStatus.RUNNING);
         pipeline.setCurrentStage("SYSTEM_DESIGN");
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("SYSTEM_DESIGN"),
+            "repository", Map.of(
+                "rootPath", "D:/projects/demo-app",
+                "includePaths", List.of("src"),
+                "excludePaths", List.of("node_modules", ".git"),
+                "targetFiles", List.of("src/App.tsx"),
+                "maxFiles", 50,
+                "maxBytes", 65_536L
+            )
+        ));
         pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
         pipeline.getStages().get(0).setStatus(StageStatus.PENDING);
 
@@ -81,6 +109,8 @@ class PipelineServiceTest {
         assertThat(response.pipelineId()).isEqualTo(pipelineId);
         assertThat(response.status()).isEqualTo("RUNNING");
         assertThat(response.currentStage()).isEqualTo("SYSTEM_DESIGN");
+        assertThat(response.repository().rootPath()).isEqualTo("D:/projects/demo-app");
+        assertThat(response.repository().targetFiles()).containsExactly("src/App.tsx");
         assertThat(response.stages()).hasSize(1);
         assertThat(response.stages().get(0).name()).isEqualTo("SYSTEM_DESIGN");
     }
@@ -103,5 +133,10 @@ class PipelineServiceTest {
             CheckpointDecision.REJECT,
             "补充数据库说明"
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> repositoryMap(Object value) {
+        return (Map<String, Object>) value;
     }
 }

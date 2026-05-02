@@ -47,16 +47,19 @@ description: "基于设计制品生成的开发任务列表"
 ### 执行平面与 Agent 拓扑实现
 - [x] T016 [P] [US1] 在 Python 执行平面实现 Temporal Worker 并注册 Activities (`execution-plane/src/workers/`)
 - [x] T017 [US1] 在 Python 执行平面使用 LangGraph 构建端到端的状态图拓扑 (`execution-plane/src/graph/flow.py`)
-- [ ] T018 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
-- [ ] T019 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
-- [ ] T020 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)
-- [ ] T021 [US1] 实现负责测试生成的 Agent 节点逻辑 (`execution-plane/src/agents/test_agent.py`)
-- [ ] T022 [US1] 实现负责代码评审的 Agent 节点逻辑 (`execution-plane/src/agents/review_agent.py`)
-- [ ] T023 [US1] 实现负责交付集成的 Agent 节点逻辑 (`execution-plane/src/agents/delivery_agent.py`)
-- [ ] T024 [US1] 集成 Checkpointer 支持 LangGraph 图状态的回溯和人工反馈注入
+- [x] T018 [US1] 在 Java 控制平面扩展流水线创建/查询契约，支持 `repository` 上下文（`rootPath`, `includePaths`, `excludePaths`, `targetFiles`, `maxFiles`, `maxBytes`）并写入 `Pipeline.global_context`
+- [ ] T019 [US1] 在 Python 执行平面实现路径驱动的代码库上下文工具 (`execution-plane/src/context/`)，支持目录遍历、文件读取、文本搜索和上下文打包
+- [ ] T020 [US1] 在 Java 控制平面实现阶段中间产物落库与展示通道，将 Activity `outputPayload` 同步到 `Stage.output_payload` 并通过状态查询/检查点 API 暴露
+- [ ] T021 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
+- [ ] T022 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
+- [ ] T023 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)
+- [ ] T024 [US1] 实现负责测试生成的 Agent 节点逻辑 (`execution-plane/src/agents/test_agent.py`)
+- [ ] T025 [US1] 实现负责代码评审的 Agent 节点逻辑 (`execution-plane/src/agents/review_agent.py`)
+- [ ] T026 [US1] 实现负责交付集成的 Agent 节点逻辑 (`execution-plane/src/agents/delivery_agent.py`)
+- [ ] T027 [US1] 集成 Checkpointer 支持 LangGraph 图状态的回溯和人工反馈注入
 
 ### 前端/控制台 (极简版)
-- [ ] T025 [P] [US1] 初始化极简前端控制台应用 (`sandbox/frontend/`)，实现触发流水线和提交 Reject/Approve 反馈的 UI。
+- [ ] T028 [P] [US1] 初始化极简前端控制台应用 (`sandbox/frontend/`)，实现触发流水线、展示阶段产物并提交 Reject/Approve 反馈的 UI。
 
 ---
 
@@ -67,15 +70,15 @@ description: "基于设计制品生成的开发任务列表"
 **独立测试**: 圈选测试页面的元素，输入自然语言指令，验证源码被修改且页面自动刷新。
 
 ### 浏览器端注入 (Sandbox Injector)
-- [ ] T026 [US2] 开发 Vite/Babel 插件在目标网页的 DOM 元素上注入 `__source` 属性 (`sandbox/injector/vite-plugin-source.ts`)
-- [ ] T027 [US2] 开发前端悬浮交互控件（Content Script 组件），实现 DOM 圈选与源码信息提取 (`sandbox/injector/content-script.tsx`)
-- [ ] T028 [US2] 在悬浮控件中实现自然语言输入对话框，并调用本地 Daemon 的修改 API。
+- [ ] T029 [US2] 开发 Vite/Babel 插件在目标网页的 DOM 元素上注入 `__source` 属性 (`sandbox/injector/vite-plugin-source.ts`)
+- [ ] T030 [US2] 开发前端悬浮交互控件（Content Script 组件），实现 DOM 圈选与源码信息提取 (`sandbox/injector/content-script.tsx`)
+- [ ] T031 [US2] 在悬浮控件中实现自然语言输入对话框，并调用本地 Daemon 的修改 API。
 
 ### 本地守护进程 (Local Daemon)
-- [ ] T029 [P] [US2] 在 Node Daemon 中实现接收 AST 源码路径及指令的 API 逻辑 (`sandbox/daemon/src/api.ts`)
-- [ ] T030 [US2] 实现 Daemon 读取本地文件，调用 LLM (或转发给执行平面) 生成对应代码节点的 Diff (`sandbox/daemon/src/coder.ts`)
-- [ ] T031 [US2] 实现 Daemon 覆写本地文件系统，配合 Vite 触发 HMR (`sandbox/daemon/src/file_manager.ts`)
-- [ ] T032 [US2] 实现修改确认后自动创建 Git 分支、Commit 及生成 MR 的逻辑 (`sandbox/daemon/src/git_ops.ts`)
+- [ ] T032 [P] [US2] 在 Node Daemon 中实现接收 AST 源码路径及指令的 API 逻辑 (`sandbox/daemon/src/api.ts`)
+- [ ] T033 [US2] 实现 Daemon 读取本地文件，调用 LLM (或转发给执行平面) 生成对应代码节点的 Diff (`sandbox/daemon/src/coder.ts`)
+- [ ] T034 [US2] 实现 Daemon 覆写本地文件系统，配合 Vite 触发 HMR (`sandbox/daemon/src/file_manager.ts`)
+- [ ] T035 [US2] 实现修改确认后自动创建 Git 分支、Commit 及生成 MR 的逻辑 (`sandbox/daemon/src/git_ops.ts`)
 
 ---
 
@@ -83,10 +86,10 @@ description: "基于设计制品生成的开发任务列表"
 
 **目标**: 文档、测试和演示准备。
 
-- [ ] T033 编写集成测试脚本，模拟一个完整的六阶段流水线 API 调用链路
-- [ ] T034 [P] 整理完整的技术方案设计文档，补充系统架构图
-- [ ] T035 更新安装与运行指南 (`quickstart.md` 或 `README.md`)
-- [ ] T036 准备并录制最终的端到端演示示例（满足赛题演示要求）
+- [ ] T036 编写集成测试脚本，模拟一个完整的六阶段流水线 API 调用链路
+- [ ] T037 [P] 整理完整的技术方案设计文档，补充系统架构图
+- [ ] T038 更新安装与运行指南 (`quickstart.md` 或 `README.md`)
+- [ ] T039 准备并录制最终的端到端演示示例（满足赛题演示要求）
 
 ---
 
@@ -95,9 +98,10 @@ description: "基于设计制品生成的开发任务列表"
 1. 基础设施设置 (T001-T006)
 2. 基础模型与接口 (T007-T012)
    - 依赖: 基础设施设置
-3. 端到端流水线 [US1] (T013-T025)
+3. 端到端流水线 [US1] (T013-T028)
    - 依赖: 基础模型与接口
-4. 网页沙箱交互 [US2] (T026-T032)
+   - 代码感知与产物展示基础能力 (T018-T020) 必须先于真实 Agent 逻辑 (T021-T026)
+4. 网页沙箱交互 [US2] (T029-T035)
    - 依赖: 无严格依赖，可在阶段 2 完成后独立与 US1 并行开发。
-5. 收尾工作 (T033-T036)
+5. 收尾工作 (T036-T039)
    - 依赖: 所有功能阶段完成

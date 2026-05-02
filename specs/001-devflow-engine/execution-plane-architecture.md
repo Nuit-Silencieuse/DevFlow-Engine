@@ -19,8 +19,9 @@
 
 当前尚未完成:
 
-- T018-T023 的真实 Agent 业务逻辑。
-- T024 的 LangGraph Checkpointer 和人工反馈回溯。
+- T018-T020 的代码感知、上下文工具和阶段产物落库/展示基础能力。
+- T021-T026 的真实 Agent 业务逻辑。
+- T027 的 LangGraph Checkpointer 和人工反馈回溯。
 - 与真实 LLM、代码仓库、测试运行器、MR 平台的集成。
 
 ## 包结构
@@ -108,7 +109,7 @@ REQUIREMENT_ANALYSIS
   -> END
 ```
 
-当前拓扑是线性图，先保证端到端契约稳定。后续 T024 引入 Checkpointer 和反馈回溯后，可以把 `SYSTEM_DESIGN` 的人工反馈扩展为条件边或恢复点。
+当前拓扑是线性图，先保证端到端契约稳定。后续 T027 引入 Checkpointer 和反馈回溯后，可以把 `SYSTEM_DESIGN` 的人工反馈扩展为条件边或恢复点。
 
 ### `build_devflow_graph`
 
@@ -163,12 +164,12 @@ result_state = run_stage("SYSTEM_DESIGN", state)
 
 | 节点函数 | 写入字段 | 当前实现 |
 |----------|----------|----------|
-| `analyze_requirement_node` | `structured_prd`, `current_step`, `error_logs` | 把原始需求写入 PRD 摘要，占位等待 T018 |
-| `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T019 |
-| `generate_code_node` | `diff_patch`, `current_step`, `error_logs` | 写入代码生成占位文本，等待 T020 |
-| `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T021 |
-| `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T022 |
-| `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T023 |
+| `analyze_requirement_node` | `structured_prd`, `current_step`, `error_logs` | 把原始需求写入 PRD 摘要，占位等待 T021 |
+| `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T022 |
+| `generate_code_node` | `diff_patch`, `current_step`, `error_logs` | 写入代码生成占位文本，等待 T023 |
+| `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T024 |
+| `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T025 |
+| `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T026 |
 
 当前每个节点都返回增量字典，而不是直接修改输入对象。这样更符合 LangGraph 的状态更新模型，也便于后续替换为真实 Agent。
 
@@ -361,11 +362,13 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 
 后续任务:
 
-- T018: 将 `analyze_requirement_node` 替换为需求分析 Agent。
-- T019: 将 `design_system_node` 替换为系统设计 Agent。
-- T020: 将 `generate_code_node` 替换为代码生成 Agent。
-- T021: 将 `generate_tests_node` 替换为测试生成 Agent。
-- T022: 将 `review_code_node` 替换为代码评审 Agent。
-- T023: 将 `integrate_delivery_node` 替换为交付集成 Agent。
-- T024: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。
-
+- T018: 控制平面接收并保存 `repository` 上下文。
+- T019: 执行平面提供路径驱动的代码库上下文工具。
+- T020: 控制平面提供阶段产物落库和展示通道。
+- T021: 将 `analyze_requirement_node` 替换为需求分析 Agent。
+- T022: 将 `design_system_node` 替换为系统设计 Agent。
+- T023: 将 `generate_code_node` 替换为代码生成 Agent。
+- T024: 将 `generate_tests_node` 替换为测试生成 Agent。
+- T025: 将 `review_code_node` 替换为代码评审 Agent。
+- T026: 将 `integrate_delivery_node` 替换为交付集成 Agent。
+- T027: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。

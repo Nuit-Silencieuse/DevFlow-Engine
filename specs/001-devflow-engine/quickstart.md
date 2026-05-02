@@ -4,7 +4,7 @@
 
 控制平面的结构、核心类字段和复杂方法流程见 [control-plane-architecture.md](./control-plane-architecture.md)。
 执行平面的结构、LangGraph 实现和 Worker 说明见 [execution-plane-architecture.md](./execution-plane-architecture.md)。
-T018-T023 的 Agent 职责、输入输出和验收要求见 [agent-design.md](./agent-design.md)。
+T021-T026 的 Agent 职责、输入输出和验收要求见 [agent-design.md](./agent-design.md)。
 
 ## 基础设施
 
@@ -61,7 +61,15 @@ mvn "-Dmaven.repo.local=C:\Users\12252\.m2\repository" spring-boot:run
 Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/pipelines" -ContentType "application/json" -Body '{
   "name": "Add user authentication",
   "requirement": "实现用户登录、注册和鉴权",
-  "stages": ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"]
+  "stages": ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"],
+  "repository": {
+    "rootPath": "D:/projects/demo-app",
+    "includePaths": ["src", "README.md"],
+    "excludePaths": ["node_modules", "dist", ".git"],
+    "targetFiles": ["src/App.tsx"],
+    "maxFiles": 50,
+    "maxBytes": 65536
+  }
 }'
 ```
 
@@ -70,6 +78,8 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/pipelines" -Co
 ```powershell
 Invoke-RestMethod -Method Get -Uri "http://localhost:8080/api/v1/pipelines/{pipelineId}"
 ```
+
+查询响应会回显 `repository` 上下文，后续执行平面 T019 会使用该上下文进行路径驱动的代码感知。
 
 提交人工检查点:
 

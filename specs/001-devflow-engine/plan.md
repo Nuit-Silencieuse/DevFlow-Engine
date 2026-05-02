@@ -5,18 +5,18 @@
 
 ## 摘要
 
-本项目旨在构建一个高度容错、可追溯且具备极致交互体验的 AI 驱动软件研发流水线引擎（DevFlow Engine）。核心采用“控制平面 + 执行平面 + 本地沙箱平面”的架构，利用 Temporal 实现基于持久化执行的流水线调度与状态管理，利用 LangGraph 实现复杂的多智能体拓扑与状态回溯，利用 Babel 注入和本地守护进程实现网页端“所见即所得”的代码修改与热更新预览。
+本项目旨在构建一个高度容错、可追溯且具备极致交互体验的 AI 驱动软件研发流水线引擎（DevFlow Engine）。核心采用“控制平面 + 执行平面 + 本地沙箱平面”的架构，利用 Temporal 实现基于持久化执行的流水线调度与状态管理，利用 LangGraph 实现复杂的多智能体拓扑与状态回溯，利用“路径驱动 + 工具调用式渐进探索”实现项目代码感知，并利用 Babel 注入和本地守护进程实现网页端“所见即所得”的代码修改与热更新预览。
 
 ## 技术背景
 
 **语言/版本**: Java 17+ (控制平面), Python 3.10+ (执行平面), TypeScript (沙箱前端/Daemon)
 **主要依赖**: Spring Boot, Temporal Java SDK, FastAPI, LangGraph, Vite, Babel
-**存储**: PostgreSQL (Temporal/状态持久化), Milvus (向量存储), Elasticsearch (代码检索)
+**存储**: PostgreSQL (Temporal/流水线状态/阶段产物持久化), Milvus (可选向量存储), Elasticsearch (可选代码检索增强)
 **测试**: JUnit 5, PyTest, Jest
 **目标平台**: Linux 容器化部署 (服务端), 现代浏览器端 (沙箱交互)
 **项目类型**: Web 服务 + CLI 守护进程 + 前端应用
 **性能目标**: 流水线状态流转延迟 < 1s, 网页端圈选交互及热更新生效 < 3s
-**约束条件**: 需要能处理长周期（可能长达数小时）的大语言模型生成任务而不丢失状态
+**约束条件**: 需要能处理长周期（可能长达数小时）的大语言模型生成任务而不丢失状态；Agent 必须至少支持通过目录/文件路径感知目标代码库上下文
 **规模/范围**: 支持多并发流水线实例，支持复杂的多智能体协作，前端注入需兼容主流 React 项目
 
 ## 章程检查
@@ -38,6 +38,9 @@ specs/001-devflow-engine/
 ├── research.md          # 阶段 0 输出
 ├── data-model.md        # 阶段 1 输出
 ├── quickstart.md        # 阶段 1 输出
+├── control-plane-architecture.md
+├── execution-plane-architecture.md
+├── agent-design.md
 ├── contracts/           # 阶段 1 输出
 └── tasks.md             # 阶段 2 输出 (由 /speckit.tasks 生成)
 ```
@@ -49,11 +52,14 @@ DevFlow-Engine/
 ├── control-plane/       # Java Spring Boot + Temporal Client (引擎核心)
 │   ├── src/main/java/
 │   │   ├── workflow/    # Temporal 工作流定义
-│   │   ├── activity/    # 活动接口契约
+│   │   ├── service/     # Pipeline 服务、Temporal Gateway、产物同步逻辑
+│   │   ├── repository/  # JPA 仓库
+│   │   ├── model/       # Pipeline/Stage 等持久化实体
 │   │   └── api/         # 供前端调用的 RESTful API
 ├── execution-plane/     # Python FastAPI + LangGraph (AI 智能体)
 │   ├── src/
 │   │   ├── agents/      # 多智能体定义
+│   │   ├── context/     # 路径驱动代码感知、文件读取、文本搜索、上下文打包
 │   │   ├── graph/       # 状态拓扑图定义
 │   │   └── workers/     # Temporal Worker 实现
 ├── sandbox/             # 本地交互与沙箱
@@ -64,6 +70,100 @@ DevFlow-Engine/
 ```
 
 **结构决策**: 采用标准的微服务结构，按技术栈和职责划分为三大独立模块，通过 Temporal 和 REST API 进行通信解耦。
+
+## 代码感知方案
+
+### 设计目标
+
+赛题要求 Agent 能感知代码库上下文，并且至少支持通过目录/文件路径提供上下文。因此本项目采用分层策略:
+
+1. **路径驱动上下文(MVP 必做)**: 用户在创建流水线时显式传入代码库根目录、包含路径、排除路径和目标文件列表。
+2. **工具调用式渐进探索(主方案)**: Agent 不一次性读取整个仓库，而是通过受控工具按需遍历目录、读取文件、搜索文本和打包上下文。
+3. **索引式混合检索(后续增强)**: 当仓库变大后，再引入 Elasticsearch 的 BM25/符号检索，并可选接入 Milvus 做语义召回。
+
+当前优先实现 1 和 2。Elasticsearch/Milvus 作为 Good-to-have，不阻塞端到端演示。
+
+### 控制平面契约
+
+创建流水线 API 需要支持 `repository` 上下文，并持久化到 `Pipeline.global_context.repository`:
+
+```json
+{
+  "name": "Add login feature",
+  "requirement": "增加用户登录功能",
+  "repository": {
+    "rootPath": "D:/projects/demo-app",
+    "includePaths": ["src", "package.json", "README.md"],
+    "excludePaths": ["node_modules", "dist", "target", ".git"],
+    "targetFiles": ["src/App.tsx"],
+    "maxFiles": 200,
+    "maxBytes": 1048576
+  }
+}
+```
+
+字段含义:
+
+| 字段 | 含义 |
+|------|------|
+| `rootPath` | 目标代码库根目录，所有读取操作必须限制在该目录内 |
+| `includePaths` | 允许 Agent 探索的目录或文件 |
+| `excludePaths` | 必须跳过的目录或文件，如依赖目录、构建产物和 `.git` |
+| `targetFiles` | 用户明确指定的重点文件 |
+| `maxFiles` | 单阶段最多读取或打包的文件数 |
+| `maxBytes` | 单阶段最多打包的文本字节数 |
+
+控制平面只负责保存、校验和透传这些约束，不直接读取目标仓库文件。真正的文件访问由执行平面或本地沙箱平面在受控工具中完成。
+
+### 执行平面工具
+
+执行平面新增 `execution-plane/src/context/`，提供以下工具:
+
+| 工具 | 作用 |
+|------|------|
+| `list_files` | 按 `rootPath/includePaths/excludePaths` 列出候选文件 |
+| `read_file` | 读取指定文件或行范围，禁止越过 `rootPath` |
+| `search_text` | 在允许路径内做关键词搜索 |
+| `build_context_pack` | 根据任务、目标文件和搜索结果生成有限大小的上下文包 |
+
+Agent 使用这些工具进行渐进式探索，并在中间产物中记录 `inspected_files`、`search_queries` 和 `relevant_symbols`，方便 UI 展示和技术答辩解释。
+
+## 中间产物落库与展示
+
+### 产物类型
+
+每个流水线阶段会生成结构化中间产物:
+
+| 阶段 | 产物字段 |
+|------|----------|
+| 需求分析 | `structured_prd` |
+| 方案设计 | `design_doc` |
+| 代码生成 | `diff_patch` |
+| 测试生成 | `test_results` |
+| 代码评审 | `review_report` |
+| 交付集成 | `delivery_status` |
+
+### 落库策略
+
+短期使用现有 `Stage.output_payload` JSONB 字段保存阶段产物，并同步更新:
+
+| 字段 | 更新时机 |
+|------|----------|
+| `Pipeline.current_stage` | 阶段开始或暂停时 |
+| `Pipeline.status` | 运行、暂停、完成或失败时 |
+| `Stage.status` | 阶段开始、完成、失败或被驳回时 |
+| `Stage.output_payload` | Activity 返回 `StageExecutionResult.outputPayload` 后 |
+
+由于 Temporal Workflow 不应直接执行普通数据库 IO，控制平面应通过受 Temporal 管理的 Activity 或专门的状态同步服务完成数据库更新。这样可以保留 Temporal 的可重试语义，并避免 Workflow 代码违反确定性约束。
+
+### 展示策略
+
+控制平面查询 API 继续以 `PipelineStatusResponse` 返回阶段列表，并在每个 `StageStatusResponse.output` 中展示对应中间产物。检查点 API/UI 应在等待人工审批时展示当前阶段产物，例如:
+
+- `SYSTEM_DESIGN` 检查点展示 `design_doc` 和代码上下文引用。
+- `CODE_REVIEW` 检查点展示 `review_report`、`test_results` 和 diff 摘要。
+
+后续前端控制台任务需要基于这些字段展示阶段产物、代码感知过程和 Approve/Reject 操作。
 
 ## 复杂度跟踪
 
