@@ -128,6 +128,15 @@ DevFlow-Engine/
 
 Agent 使用这些工具进行渐进式探索，并在中间产物中记录 `inspected_files`、`search_queries` 和 `relevant_symbols`，方便 UI 展示和技术答辩解释。
 
+T019 已落地第一版路径驱动上下文工具:
+
+- `RepositoryContext.from_mapping` 负责把控制平面 `repository` JSON 转换为执行平面对象。
+- `list_files` 负责在 `includePaths` 和 `excludePaths` 约束下遍历仓库。
+- `read_file` 负责安全读取仓库内文件，并支持按行截取。
+- `search_text` 负责在允许路径内做大小写不敏感文本搜索。
+- `build_context_pack` 负责按 `targetFiles`、显式路径和搜索命中文件构造受 `maxFiles`/`maxBytes` 限制的上下文包。
+- 测试包含真实项目仓库检索，验证执行平面可以在当前代码库中找到 `RepositoryContext.java`。
+
 ## 中间产物落库与展示
 
 ### 产物类型

@@ -128,6 +128,7 @@ Python 执行平面位于 `execution-plane`。当前本地虚拟环境为 Python
 
 - `tests/test_flow.py`: 验证 LangGraph 六阶段拓扑和人工反馈注入。
 - `tests/test_worker.py`: 验证 Temporal Activity 注册名与 Java 契约一致，并验证 Activity 返回 `StageExecutionResult` 形状。
+- `tests/test_context_tools.py`: 验证路径驱动代码库上下文工具，包括目录遍历、文件读取、文本搜索、上下文打包、越界路径拒绝，以及对当前真实项目仓库的 `RepositoryContext.java` 检索。
 
 执行平面依赖记录在:
 

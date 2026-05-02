@@ -60,6 +60,7 @@ Thumbs.db
 *.bak
 *.orig
 get-docker.sh
+execution-plane/.test_tmp/
 
 # Specify
 .specify/tmp/

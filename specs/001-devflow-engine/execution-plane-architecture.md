@@ -16,10 +16,11 @@
 - 六阶段 LangGraph 拓扑。
 - 与 Java Activity 契约一致的 Python Temporal Activities。
 - Python Activity Worker 启动入口。
+- T019 路径驱动代码库上下文工具。
 
 当前尚未完成:
 
-- T018-T020 的代码感知、上下文工具和阶段产物落库/展示基础能力。
+- T020 的阶段产物落库/展示基础能力。
 - T021-T026 的真实 Agent 业务逻辑。
 - T027 的 LangGraph Checkpointer 和人工反馈回溯。
 - 与真实 LLM、代码仓库、测试运行器、MR 平台的集成。
@@ -28,6 +29,7 @@
 
 | 路径 | 职责 |
 |------|------|
+| `src/context/repository_context.py` | 提供路径驱动代码库上下文工具，支持目录遍历、文件读取、文本搜索和上下文打包 |
 | `src/graph/state.py` | 定义 `DevFlowState`，作为 LangGraph 共享状态 |
 | `src/graph/flow.py` | 定义阶段常量、节点函数、状态图构建和单阶段执行入口 |
 | `src/graph/__init__.py` | 导出状态类型、阶段顺序和图构建函数 |
@@ -36,6 +38,7 @@
 | `src/workers/__init__.py` | 导出 Worker 工厂和 Activity 注册函数 |
 | `tests/test_flow.py` | 验证 LangGraph 拓扑和人工反馈注入 |
 | `tests/test_worker.py` | 验证 Activity 注册名和返回契约 |
+| `tests/test_context_tools.py` | 验证代码库上下文工具，并覆盖真实项目仓库检索 |
 
 ## 运行时调用链路
 
@@ -64,6 +67,8 @@ Java DevFlowWorkflowImpl.executeStage
 | 字段 | 类型 | 含义 | 主要写入阶段 |
 |------|------|------|--------------|
 | `original_requirement` | `str` | 原始需求文本 | Activity 请求初始化 |
+| `repository_context` | `dict[str, Any]` | 控制平面 `globalContext.repository` 传入的代码库路径配置 | Activity 请求初始化 |
+| `code_context` | `dict[str, Any]` | 执行平面上下文工具生成的文件引用、搜索词和上下文包摘要 | 代码感知工具或后续 Agent |
 | `structured_prd` | `dict[str, Any]` | 结构化需求分析结果 | `REQUIREMENT_ANALYSIS` |
 | `design_doc` | `dict[str, Any]` | 系统设计文档和文件规划 | `SYSTEM_DESIGN` |
 | `diff_patch` | `str` | 代码变更补丁或摘要 | `CODE_GENERATION` |
@@ -261,6 +266,8 @@ test_results
 review_report
 delivery_status
 human_feedback
+repository_context
+code_context
 current_step
 error_logs
 ```
@@ -372,3 +379,75 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 - T025: 将 `review_code_node` 替换为代码评审 Agent。
 - T026: 将 `integrate_delivery_node` 替换为交付集成 Agent。
 - T027: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。
+
+## 代码库上下文工具
+
+T019 已在 `execution-plane/src/context/` 中实现路径驱动的代码库上下文工具，供后续 T021-T026 的真实 Agent 通过工具调用式渐进探索目标仓库。
+
+### 模块结构
+
+| 路径 | 说明 |
+|------|------|
+| `src/context/repository_context.py` | 定义 `RepositoryContext`、文件匹配、搜索命中、上下文包等数据结构，并实现目录遍历、文件读取、文本搜索和上下文打包 |
+| `src/context/__init__.py` | 对外导出上下文工具，避免 Agent 直接依赖内部文件名 |
+| `tests/test_context_tools.py` | 覆盖临时仓库能力测试、越界路径拒绝测试、真实项目仓库上下文工具测试 |
+
+### 核心数据结构
+
+| 字段/类型 | 含义 |
+|----------|------|
+| `RepositoryContext.root_path` | 用户传入的目标仓库根目录，所有工具调用都必须限制在该目录内 |
+| `include_paths` | 允许遍历的目录或文件路径；为空时默认从仓库根目录开始遍历 |
+| `exclude_paths` | 需要排除的目录或文件前缀，例如 `.git`、`node_modules`、`target`、`venv` |
+| `target_files` | 用户或控制平面明确指定的关键文件，会优先进入上下文打包候选集 |
+| `max_files` | 单次遍历或打包最多处理的文件数量 |
+| `max_bytes` | 单次上下文包的最大字节预算，防止一次性塞入过多代码 |
+| `ContextPack.inspected_files` | 本次上下文打包实际检查过的文件列表，可作为中间产物展示依据 |
+| `ContextPack.search_queries` | 本次打包使用过的搜索词，可展示 Agent 的探索过程 |
+
+### 工具执行流程
+
+`list_files(context)`:
+
+```text
+1. 校验 root_path 必须存在且是目录
+2. 将 include_paths 解析为 root_path 内部路径
+3. 递归遍历目录，遇到 exclude_paths 前缀立即跳过
+4. 合并 target_files 中明确指定的文件
+5. 按相对路径稳定排序，并按 max_files 截断
+```
+
+`read_file(context, path, start_line, end_line)`:
+
+```text
+1. 将 path 解析到 root_path 内部，禁止通过 .. 逃逸到仓库外
+2. 如果路径命中 exclude_paths，则拒绝读取
+3. 使用 UTF-8 读取文本，无法识别的字符使用替代字符保留上下文连续性
+4. 如果传入行号，则按 1-based 闭区间返回片段
+```
+
+`search_text(context, query)`:
+
+```text
+1. 基于 list_files 得到允许搜索的文件集合
+2. 逐文件读取文本并按行做大小写不敏感匹配
+3. 返回相对路径、行号和命中行，供 Agent 决定下一步读取哪些文件
+```
+
+`build_context_pack(context, paths, search_queries)`:
+
+```text
+1. 优先加入 target_files 和调用方显式 paths
+2. 对 search_queries 调用 search_text，并把命中文件加入候选集
+3. 按 max_files 和 max_bytes 控制预算
+4. 返回 ContextPack，包含文件内容、截断标记、已检查文件和搜索词
+```
+
+### 与 LangGraph 状态的关系
+
+`DevFlowState` 已增加:
+
+- `repository_context`: 控制平面传入并持久化的仓库上下文配置。
+- `code_context`: 执行平面上下文工具生成的上下文包或探索摘要。
+
+Temporal 仍负责流水线阶段的持久调度和失败重试；上下文工具只负责在某个 Activity 执行期间受控读取代码库，为 LangGraph 节点和 Agent 提供输入材料。

@@ -83,6 +83,12 @@ def _state_from_request(request: StageExecutionRequest) -> DevFlowState:
     _merge_known_state(state, global_context)
     _merge_known_state(state, previous_output)
 
+    # 控制平面使用 globalContext.repository 存储仓库配置；执行平面统一映射为
+    # repository_context，后续 Agent 节点即可直接调用 src.context 工具读取代码库。
+    repository_context = global_context.get("repository")
+    if repository_context:
+        state["repository_context"] = repository_context
+
     feedback = global_context.get("human_feedback")
     if feedback:
         state["human_feedback"] = str(feedback)
@@ -98,6 +104,8 @@ def _merge_known_state(state: DevFlowState, payload: dict[str, Any]) -> None:
         "review_report",
         "delivery_status",
         "human_feedback",
+        "repository_context",
+        "code_context",
         "current_step",
         "error_logs",
     ):

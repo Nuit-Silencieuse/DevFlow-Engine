@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from src.workers.activities import analyze_requirement, registered_activities
+from src.workers.activities import analyze_requirement, registered_activities, _state_from_request
 from src.workers.worker import TASK_QUEUE
 
 
@@ -42,6 +42,28 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertEqual(result["status"], "COMPLETED")
         self.assertIn("outputPayload", result)
         self.assertIn("structured_prd", result["outputPayload"])
+
+    def test_state_from_request_exposes_repository_context_to_agents(self):
+        state = _state_from_request(
+            {
+                "requirement": "修改登录页面",
+                "globalContext": {
+                    "repository": {
+                        "rootPath": "D:/projects/demo",
+                        "includePaths": ["src"],
+                        "excludePaths": ["node_modules"],
+                    }
+                },
+                "previousOutput": {
+                    "code_context": {
+                        "inspected_files": ["src/App.tsx"],
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(state["repository_context"]["rootPath"], "D:/projects/demo")
+        self.assertEqual(state["code_context"]["inspected_files"], ["src/App.tsx"])
 
 
 if __name__ == "__main__":
