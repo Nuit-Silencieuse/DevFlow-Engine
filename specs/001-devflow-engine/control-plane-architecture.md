@@ -45,6 +45,8 @@ HTTP GET /api/v1/pipelines/{id}
   -> PipelineController.getPipeline
   -> PipelineService.getPipeline
   -> PipelineRepository.findById
+  -> TemporalPipelineGateway.getStatus
+  -> 同步 WorkflowStatusSnapshot 到 Pipeline/Stage 数据库快照
   -> PipelineStatusResponse
 ```
 
@@ -54,6 +56,7 @@ HTTP GET /api/v1/pipelines/{id}
 HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
   -> PipelineController.submitCheckpointDecision
   -> PipelineService.submitCheckpointDecision
+  -> 同步当前阶段产物到 Stage.output_payload
   -> TemporalPipelineGateway.signalCheckpoint
   -> DevFlowWorkflowImpl.approveCheckpoint 或 rejectCheckpoint
 ```
@@ -111,6 +114,8 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 | `CheckpointDecisionRequest` | `feedback` | 驳回或补充说明 |
 | `CheckpointDecisionResponse` | `status` | Signal 接收后的流水线状态提示 |
 | `CheckpointDecisionResponse` | `message` | 人类可读消息 |
+| `CheckpointDecisionResponse` | `stageName` | 本次检查点对应的阶段名 |
+| `CheckpointDecisionResponse` | `stageOutput` | 提交检查点前已同步的阶段产物，用于 UI 展示审批上下文 |
 | `ErrorResponse` | `code` | 错误码 |
 | `ErrorResponse` | `message` | 错误说明 |
 
@@ -293,6 +298,21 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 6. 返回 PipelineStatusResponse
 ```
 
+#### T020 阶段产物同步
+
+`getPipeline` 和 `submitCheckpointDecision` 都会先调用 `synchronizeWorkflowSnapshot`。该方法通过 `TemporalPipelineGateway.getStatus` 查询 Workflow 内部的 `WorkflowStatusSnapshot`，然后把快照同步到数据库聚合:
+
+```text
+WorkflowStatusSnapshot.status        -> Pipeline.status
+WorkflowStatusSnapshot.currentStage  -> Pipeline.current_stage
+StageExecutionResult.status          -> Stage.status
+StageExecutionResult.outputPayload   -> Stage.output_payload
+```
+
+同步逻辑刻意放在 `PipelineService`，而不是放进 `DevFlowWorkflowImpl`。原因是 Temporal Workflow 代码需要保持确定性，普通数据库 IO 会受到网络、事务、重试时机影响，不适合直接写在 Workflow 线程里。Service 层读取 Workflow Query 后再落库，可以把 Temporal 的执行态转换成控制平面可展示、可查询、可复用的持久快照。
+
+如果同一个阶段被多次执行，例如 `SYSTEM_DESIGN` 被驳回后重跑，Workflow 快照会包含多条同名 `StageExecutionResult`。数据库 `stages` 表按阶段名保留一行，因此同步时按快照顺序覆盖，最终展示该阶段最新一次结果。完整历史后续由 `CheckpointFeedback` 和审计日志扩展承载。
+
 #### `submitCheckpointDecision`
 
 输入:
@@ -335,8 +355,14 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 | `createGlobalContext` | 构造写入 `Pipeline.globalContext` 的初始 JSON |
 | `repositoryToMap` | 将 `RepositoryContext` 转为 JSONB 可持久化的 Map |
 | `readRepositoryContext` | 从 `Pipeline.globalContext.repository` 还原查询响应 DTO |
+| `synchronizeWorkflowSnapshot` | 查询 Temporal Workflow 快照，并触发阶段产物落库 |
+| `applyWorkflowSnapshot` | 将 Workflow 状态、当前阶段和阶段执行结果更新到 `Pipeline` 聚合 |
+| `applyStageExecutionResult` | 将单个 `StageExecutionResult.outputPayload` 写入同名 `Stage.outputPayload` |
+| `copyOutputPayload` | 复制 Activity 输出 Map，避免直接持有外部可变引用 |
 | `readRequestedStageOrder` | 从 JSON 上下文读取阶段顺序 |
 | `stageOrder` | 查询阶段排序权重 |
+| `parsePipelineStatus` | 将 Workflow 状态字符串转换为 `PipelineStatus`，异常时保守回退为 `RUNNING` |
+| `parseStageStatus` | 将 Activity 状态字符串转换为 `StageStatus`，异常时保守回退为 `RUNNING` |
 | `parseDecision` | 把 API 字符串解析为 `CheckpointDecision` 枚举 |
 | `agentRole` | 将阶段名映射到执行平面 Agent 角色 |
 
@@ -356,6 +382,7 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 |------|------|
 | `startPipeline` | 根据 `DevFlowWorkflowInput` 启动一个 Workflow |
 | `signalCheckpoint` | 向指定 Workflow 发送审批 Signal |
+| `getStatus` | 查询指定 Workflow 的 `WorkflowStatusSnapshot`，供 Service 层同步数据库快照 |
 
 ### `TemporalPipelineGatewayImpl`
 
@@ -388,6 +415,15 @@ HTTP POST /api/v1/pipelines/{id}/checkpoints/{stageName}
 2. 构造 CheckpointSignal
 3. decision == APPROVE 时调用 workflow.approveCheckpoint
 4. decision == REJECT 时调用 workflow.rejectCheckpoint
+```
+
+`getStatus`:
+
+```text
+1. 使用 devflow-pipeline-{pipelineId} 创建已有 Workflow Stub
+2. 调用 workflow.getStatus 查询 Workflow 内部快照
+3. 找不到 Workflow 时返回 Optional.empty
+4. 其他情况下返回 Optional<WorkflowStatusSnapshot>
 ```
 
 `workflowId`:

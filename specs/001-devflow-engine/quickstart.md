@@ -30,8 +30,8 @@ mvn "-Dmaven.repo.local=C:\Users\12252\.m2\repository" test
 
 当前测试覆盖:
 
-- `PipelineControllerContractTest`: 验证流水线 REST API 创建、查询和人工检查点响应。
-- `PipelineServiceTest`: 验证流水线持久化、阶段初始化、Temporal Workflow 启动和 Signal 转发。
+- `PipelineControllerContractTest`: 验证流水线 REST API 创建、查询、阶段产物输出和人工检查点响应。
+- `PipelineServiceTest`: 验证流水线持久化、阶段初始化、Temporal Workflow 启动、Workflow 快照同步、`Stage.output_payload` 落库和 Signal 转发。
 - `DevFlowWorkflowContractTest`: 验证 Temporal Workflow 与 Activity 接口注解契约。
 - `DevFlowWorkflowImplTest`: 验证 Workflow 编排、批准继续执行、驳回后注入反馈并重跑设计阶段。
 

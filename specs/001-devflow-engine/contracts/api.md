@@ -102,13 +102,21 @@ Temporal Workflow ID 约定:
     },
     {
       "name": "SYSTEM_DESIGN",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "requiresHumanApproval": true,
-      "output": {}
+      "output": {
+        "design_doc": {
+          "summary": "系统设计草案",
+          "tables": ["users"]
+        },
+        "current_step": "SYSTEM_DESIGN"
+      }
     }
   ]
 }
 ```
+
+`stages[].output` 来自数据库字段 `Stage.output_payload`。控制平面在查询状态时会先读取 Temporal `WorkflowStatusSnapshot`，将 Activity `outputPayload` 同步到该字段，再返回给前端。
 
 未找到响应 `404 Not Found`:
 
@@ -139,9 +147,18 @@ Temporal Workflow ID 约定:
 ```json
 {
   "status": "RUNNING",
-  "message": "Signal received. Pipeline resuming or re-routing."
+  "message": "Signal received. Pipeline resuming or re-routing.",
+  "stageName": "SYSTEM_DESIGN",
+  "stageOutput": {
+    "design_doc": {
+      "summary": "系统设计草案"
+    },
+    "current_step": "SYSTEM_DESIGN"
+  }
 }
 ```
+
+`stageOutput` 是发送 Signal 前同步到 `Stage.output_payload` 的当前阶段产物，便于检查点 UI 在提交后仍能展示审批上下文。
 
 非法决策响应 `400 Bad Request`:
 

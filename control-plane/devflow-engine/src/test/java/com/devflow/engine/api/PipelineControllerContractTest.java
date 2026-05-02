@@ -85,7 +85,12 @@ class PipelineControllerContractTest {
                     50,
                     65_536L
                 ),
-                List.of(new StageStatusResponse("SYSTEM_DESIGN", "PENDING", true, Map.of()))
+                List.of(new StageStatusResponse(
+                    "SYSTEM_DESIGN",
+                    "COMPLETED",
+                    true,
+                    Map.of("design_doc", Map.of("summary", "系统设计草案"))
+                ))
             ));
 
         mockMvc.perform(get("/api/v1/pipelines/{id}", pipelineId))
@@ -95,14 +100,20 @@ class PipelineControllerContractTest {
             .andExpect(jsonPath("$.currentStage").value("SYSTEM_DESIGN"))
             .andExpect(jsonPath("$.repository.rootPath").value("D:/projects/demo-app"))
             .andExpect(jsonPath("$.repository.targetFiles[0]").value("src/App.tsx"))
-            .andExpect(jsonPath("$.stages[0].name").value("SYSTEM_DESIGN"));
+            .andExpect(jsonPath("$.stages[0].name").value("SYSTEM_DESIGN"))
+            .andExpect(jsonPath("$.stages[0].output.design_doc.summary").value("系统设计草案"));
     }
 
     @Test
     void checkpointRouteSendsSignalAndReturnsAcceptedDecision() throws Exception {
         UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000001");
         when(pipelineService.submitCheckpointDecision(any(UUID.class), any(String.class), any(CheckpointDecisionRequest.class)))
-            .thenReturn(new CheckpointDecisionResponse("RUNNING", "Signal received. Pipeline resuming or re-routing."));
+            .thenReturn(new CheckpointDecisionResponse(
+                "RUNNING",
+                "Signal received. Pipeline resuming or re-routing.",
+                "SYSTEM_DESIGN",
+                Map.of("design_doc", Map.of("summary", "系统设计草案"))
+            ));
 
         mockMvc.perform(post("/api/v1/pipelines/{id}/checkpoints/{stageName}", pipelineId, "SYSTEM_DESIGN")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -114,7 +125,9 @@ class PipelineControllerContractTest {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("RUNNING"))
-            .andExpect(jsonPath("$.message").value("Signal received. Pipeline resuming or re-routing."));
+            .andExpect(jsonPath("$.message").value("Signal received. Pipeline resuming or re-routing."))
+            .andExpect(jsonPath("$.stageName").value("SYSTEM_DESIGN"))
+            .andExpect(jsonPath("$.stageOutput.design_doc.summary").value("系统设计草案"));
 
         verify(pipelineService).submitCheckpointDecision(any(UUID.class), any(String.class), any(CheckpointDecisionRequest.class));
     }

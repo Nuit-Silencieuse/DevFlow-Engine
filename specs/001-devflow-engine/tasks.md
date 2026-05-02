@@ -49,7 +49,7 @@ description: "基于设计制品生成的开发任务列表"
 - [x] T017 [US1] 在 Python 执行平面使用 LangGraph 构建端到端的状态图拓扑 (`execution-plane/src/graph/flow.py`)
 - [x] T018 [US1] 在 Java 控制平面扩展流水线创建/查询契约，支持 `repository` 上下文（`rootPath`, `includePaths`, `excludePaths`, `targetFiles`, `maxFiles`, `maxBytes`）并写入 `Pipeline.global_context`
 - [x] T019 [US1] 在 Python 执行平面实现路径驱动的代码库上下文工具 (`execution-plane/src/context/`)，支持目录遍历、文件读取、文本搜索和上下文打包
-- [ ] T020 [US1] 在 Java 控制平面实现阶段中间产物落库与展示通道，将 Activity `outputPayload` 同步到 `Stage.output_payload` 并通过状态查询/检查点 API 暴露
+- [x] T020 [US1] 在 Java 控制平面实现阶段中间产物落库与展示通道，将 Activity `outputPayload` 同步到 `Stage.output_payload` 并通过状态查询/检查点 API 暴露
 - [ ] T021 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
 - [ ] T022 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
 - [ ] T023 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)

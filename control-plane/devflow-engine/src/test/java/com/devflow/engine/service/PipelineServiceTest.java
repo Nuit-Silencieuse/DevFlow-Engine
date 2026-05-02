@@ -14,6 +14,8 @@ import com.devflow.engine.model.StageStatus;
 import com.devflow.engine.repository.PipelineRepository;
 import com.devflow.engine.workflow.CheckpointDecision;
 import com.devflow.engine.workflow.DevFlowWorkflowInput;
+import com.devflow.engine.workflow.StageExecutionResult;
+import com.devflow.engine.workflow.WorkflowStatusSnapshot;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -116,9 +118,58 @@ class PipelineServiceTest {
     }
 
     @Test
+    void getPipelineSynchronizesWorkflowOutputsIntoStageSnapshots() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000020");
+        Pipeline pipeline = new Pipeline("Add auth");
+        pipeline.setId(pipelineId);
+        pipeline.setStatus(PipelineStatus.RUNNING);
+        pipeline.setCurrentStage("REQUIREMENT_ANALYSIS");
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN")
+        ));
+        pipeline.addStage(PipelineService.createStage("REQUIREMENT_ANALYSIS"));
+        pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
+
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(temporalPipelineGateway.getStatus(pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
+            pipelineId,
+            "SUSPENDED",
+            "SYSTEM_DESIGN",
+            List.of(
+                new StageExecutionResult(
+                    "REQUIREMENT_ANALYSIS",
+                    "COMPLETED",
+                    Map.of("structured_prd", Map.of("summary", "登录注册"))
+                ),
+                new StageExecutionResult(
+                    "SYSTEM_DESIGN",
+                    "COMPLETED",
+                    Map.of("design_doc", Map.of("tables", List.of("users")))
+                )
+            )
+        )));
+
+        var response = pipelineService.getPipeline(pipelineId);
+
+        assertThat(pipeline.getStatus()).isEqualTo(PipelineStatus.SUSPENDED);
+        assertThat(pipeline.getCurrentStage()).isEqualTo("SYSTEM_DESIGN");
+        assertThat(response.stages()).hasSize(2);
+        assertThat(response.stages().get(0).status()).isEqualTo("COMPLETED");
+        assertThat(response.stages().get(0).output()).containsKey("structured_prd");
+        assertThat(response.stages().get(1).output()).containsKey("design_doc");
+        verify(pipelineRepository).save(pipeline);
+    }
+
+    @Test
     void submitCheckpointDecisionSignalsTemporalWorkflow() {
         UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000001");
-        when(pipelineRepository.existsById(pipelineId)).thenReturn(true);
+        Pipeline pipeline = new Pipeline("Add auth");
+        pipeline.setId(pipelineId);
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("SYSTEM_DESIGN")
+        ));
+        pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
 
         var response = pipelineService.submitCheckpointDecision(
             pipelineId,
@@ -132,6 +183,46 @@ class PipelineServiceTest {
             "SYSTEM_DESIGN",
             CheckpointDecision.REJECT,
             "补充数据库说明"
+        );
+    }
+
+    @Test
+    void submitCheckpointDecisionReturnsCurrentStageOutputForReviewUi() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000021");
+        Pipeline pipeline = new Pipeline("Add auth");
+        pipeline.setId(pipelineId);
+        pipeline.setStatus(PipelineStatus.SUSPENDED);
+        pipeline.setCurrentStage("SYSTEM_DESIGN");
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("SYSTEM_DESIGN")
+        ));
+        pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
+
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(temporalPipelineGateway.getStatus(pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
+            pipelineId,
+            "SUSPENDED",
+            "SYSTEM_DESIGN",
+            List.of(new StageExecutionResult(
+                "SYSTEM_DESIGN",
+                "COMPLETED",
+                Map.of("design_doc", Map.of("summary", "需要审批的方案"))
+            ))
+        )));
+
+        var response = pipelineService.submitCheckpointDecision(
+            pipelineId,
+            "SYSTEM_DESIGN",
+            new CheckpointDecisionRequest("APPROVE", "")
+        );
+
+        assertThat(response.stageName()).isEqualTo("SYSTEM_DESIGN");
+        assertThat(response.stageOutput()).containsKey("design_doc");
+        verify(temporalPipelineGateway).signalCheckpoint(
+            pipelineId,
+            "SYSTEM_DESIGN",
+            CheckpointDecision.APPROVE,
+            ""
         );
     }
 

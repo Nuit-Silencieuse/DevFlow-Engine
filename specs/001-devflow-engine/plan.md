@@ -165,6 +165,14 @@ T019 已落地第一版路径驱动上下文工具:
 
 由于 Temporal Workflow 不应直接执行普通数据库 IO，控制平面应通过受 Temporal 管理的 Activity 或专门的状态同步服务完成数据库更新。这样可以保留 Temporal 的可重试语义，并避免 Workflow 代码违反确定性约束。
 
+T020 采用“查询触发的状态同步服务”实现短期落库策略:
+
+- `TemporalPipelineGateway.getStatus` 通过 Workflow Query 读取 `WorkflowStatusSnapshot`。
+- `PipelineService.synchronizeWorkflowSnapshot` 在状态查询和检查点提交前同步快照。
+- `StageExecutionResult.outputPayload` 写入同名 `Stage.output_payload`。
+- 同名阶段多次执行时以最新结果覆盖，用于 UI 展示当前可审批或可查看的阶段产物。
+- 检查点响应新增 `stageName` 和 `stageOutput`，避免前端提交审批后丢失当前审批上下文。
+
 ### 展示策略
 
 控制平面查询 API 继续以 `PipelineStatusResponse` 返回阶段列表，并在每个 `StageStatusResponse.output` 中展示对应中间产物。检查点 API/UI 应在等待人工审批时展示当前阶段产物，例如:

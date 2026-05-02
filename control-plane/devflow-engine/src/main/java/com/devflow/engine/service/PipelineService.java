@@ -10,9 +10,12 @@ import com.devflow.engine.api.StageStatusResponse;
 import com.devflow.engine.model.Pipeline;
 import com.devflow.engine.model.PipelineStatus;
 import com.devflow.engine.model.Stage;
+import com.devflow.engine.model.StageStatus;
 import com.devflow.engine.repository.PipelineRepository;
 import com.devflow.engine.workflow.CheckpointDecision;
 import com.devflow.engine.workflow.DevFlowWorkflowInput;
+import com.devflow.engine.workflow.StageExecutionResult;
+import com.devflow.engine.workflow.WorkflowStatusSnapshot;
 import jakarta.transaction.Transactional;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -71,6 +74,7 @@ public class PipelineService {
         Pipeline pipeline = pipelineRepository.findById(id)
             .orElseThrow(() -> new NoSuchElementException("Pipeline not found: " + id));
 
+        synchronizeWorkflowSnapshot(pipeline);
         List<String> requestedOrder = readRequestedStageOrder(pipeline);
         List<StageStatusResponse> stages = pipeline.getStages().stream()
             .sorted((left, right) -> Integer.compare(
@@ -100,18 +104,102 @@ public class PipelineService {
         String stageName,
         CheckpointDecisionRequest request
     ) {
-        if (!pipelineRepository.existsById(pipelineId)) {
-            throw new NoSuchElementException("Pipeline not found: " + pipelineId);
-        }
+        Pipeline pipeline = pipelineRepository.findById(pipelineId)
+            .orElseThrow(() -> new NoSuchElementException("Pipeline not found: " + pipelineId));
+        synchronizeWorkflowSnapshot(pipeline);
+
         CheckpointDecision decision = parseDecision(request.decision());
         temporalPipelineGateway.signalCheckpoint(pipelineId, stageName, decision, request.feedback());
-        return new CheckpointDecisionResponse("RUNNING", "Signal received. Pipeline resuming or re-routing.");
+
+        Map<String, Object> stageOutput = pipeline.getStages().stream()
+            .filter(stage -> stage.getName().equals(stageName))
+            .findFirst()
+            .map(Stage::getOutputPayload)
+            .orElse(Map.of());
+        return new CheckpointDecisionResponse(
+            "RUNNING",
+            "Signal received. Pipeline resuming or re-routing.",
+            stageName,
+            stageOutput
+        );
     }
 
     static Stage createStage(String stageName) {
         Stage stage = new Stage(stageName, agentRole(stageName));
         stage.setRequiresHumanApproval("SYSTEM_DESIGN".equals(stageName));
         return stage;
+    }
+
+    private void synchronizeWorkflowSnapshot(Pipeline pipeline) {
+        temporalPipelineGateway.getStatus(pipeline.getId())
+            .ifPresent(snapshot -> applyWorkflowSnapshot(pipeline, snapshot));
+    }
+
+    private void applyWorkflowSnapshot(Pipeline pipeline, WorkflowStatusSnapshot snapshot) {
+        /*
+         * T020 的核心是“阶段产物展示”，而阶段产物的原始来源是 Activity 返回的
+         * StageExecutionResult.outputPayload。Temporal Workflow 会把这些结果保存在
+         * WorkflowStatusSnapshot.stages 中；控制平面查询状态或提交检查点时，把这份快照
+         * 同步进数据库的 Stage.output_payload。
+         *
+         * 这里没有在 Workflow 内直接写数据库，原因是 Temporal Workflow 代码必须保持确定性。
+         * 普通数据库 IO 会受到网络、事务、重试时机影响，不适合放在 Workflow 线程中。
+         * 因此同步逻辑放在 Spring Service 层，由 API 读写路径触发，并用数据库实体作为
+         * UI 和后续查询的稳定快照。
+         */
+        if (snapshot.status() != null) {
+            pipeline.setStatus(parsePipelineStatus(snapshot.status()));
+        }
+        if (snapshot.currentStage() != null) {
+            pipeline.setCurrentStage(snapshot.currentStage());
+        }
+
+        if (snapshot.stages() != null) {
+            snapshot.stages().forEach(result -> applyStageExecutionResult(pipeline, result));
+        }
+        pipelineRepository.save(pipeline);
+    }
+
+    private static void applyStageExecutionResult(Pipeline pipeline, StageExecutionResult result) {
+        /*
+         * Workflow 快照中的 stages 是按执行时间追加的日志，而数据库 stages 表按阶段名保持
+         * 每个阶段一行。SYSTEM_DESIGN 被驳回后可能会出现多条同名结果；这里按快照顺序覆盖，
+         * 让数据库保留“该阶段当前最新可展示产物”。历史驳回记录后续由 CheckpointFeedback
+         * 和更完整的审计日志承担。
+         */
+        if (result == null || result.stageName() == null) {
+            return;
+        }
+        pipeline.getStages().stream()
+            .filter(stage -> stage.getName().equals(result.stageName()))
+            .findFirst()
+            .ifPresent(stage -> {
+                stage.setStatus(parseStageStatus(result.status()));
+                stage.setOutputPayload(copyOutputPayload(result.outputPayload()));
+            });
+    }
+
+    private static Map<String, Object> copyOutputPayload(Map<String, Object> outputPayload) {
+        if (outputPayload == null || outputPayload.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        return new LinkedHashMap<>(outputPayload);
+    }
+
+    private static PipelineStatus parsePipelineStatus(String value) {
+        try {
+            return PipelineStatus.valueOf(String.valueOf(value).trim().toUpperCase());
+        } catch (RuntimeException ex) {
+            return PipelineStatus.RUNNING;
+        }
+    }
+
+    private static StageStatus parseStageStatus(String value) {
+        try {
+            return StageStatus.valueOf(String.valueOf(value).trim().toUpperCase());
+        } catch (RuntimeException ex) {
+            return StageStatus.RUNNING;
+        }
     }
 
     private static void validateCreateRequest(CreatePipelineRequest request) {
