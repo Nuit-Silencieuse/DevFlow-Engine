@@ -734,6 +734,7 @@ temporal:
 - 控制平面侧 Temporal Workflow Worker 的启动和注册。
 - Workflow 状态与数据库 `Pipeline/Stage` 状态的同步。
 - T018-T020 代码感知、上下文工具和阶段产物落库/展示基础能力。
-- T021-T026 真实 Agent 节点逻辑。
-- T027 LangGraph Checkpointer 与人工反馈回溯。
+- T021 执行平面可配置 LLM 调用客户端。
+- T022-T027 真实 Agent 节点逻辑。
+- T028 LangGraph Checkpointer 与人工反馈回溯。
 - 失败重试、幂等和 outbox 等一致性增强。

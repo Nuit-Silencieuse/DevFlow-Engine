@@ -4,7 +4,7 @@
 
 控制平面的结构、核心类字段和复杂方法流程见 [control-plane-architecture.md](./control-plane-architecture.md)。
 执行平面的结构、LangGraph 实现和 Worker 说明见 [execution-plane-architecture.md](./execution-plane-architecture.md)。
-T021-T026 的 Agent 职责、输入输出和验收要求见 [agent-design.md](./agent-design.md)。
+T021 的 LLM 调用客户端设计见 [t021-llm-client-design.md](./t021-llm-client-design.md)，T022-T027 的 Agent 职责、输入输出和验收要求见 [agent-design.md](./agent-design.md)。
 
 ## 基础设施
 
@@ -129,6 +129,25 @@ Python 执行平面位于 `execution-plane`。当前本地虚拟环境为 Python
 - `tests/test_flow.py`: 验证 LangGraph 六阶段拓扑和人工反馈注入。
 - `tests/test_worker.py`: 验证 Temporal Activity 注册名与 Java 契约一致，并验证 Activity 返回 `StageExecutionResult` 形状。
 - `tests/test_context_tools.py`: 验证路径驱动代码库上下文工具，包括目录遍历、文件读取、文本搜索、上下文打包、越界路径拒绝，以及对当前真实项目仓库的 `RepositoryContext.java` 检索。
+- `tests/test_llm_client.py`: 验证 LLM 调用客户端的 Fake Provider、运行时 Provider 切换、Markdown JSON 提取、解析失败、短周期重试、敏感信息脱敏，以及 OpenAI-compatible/Anthropic-compatible Provider 的请求适配。
+
+默认执行平面测试不会访问真实 LLM 网络。真实 API Key/网络冒烟测试需要显式开启:
+
+```powershell
+Copy-Item .\.env.local.example .\.env.local
+# 编辑 .\.env.local，填入 API Key，并确认 DEVFLOW_LLM_INTEGRATION_TEST=1
+.\venv\python.exe -m unittest tests.test_llm_client.LlmClientRealNetworkTest
+```
+
+也可以使用配置文件模板:
+
+```powershell
+Copy-Item .\config\llm.test.example.json .\config\llm.local.json
+# .env.local 中设置 DEVFLOW_LLM_CONFIG_FILE=./config/llm.local.json 和 API Key
+.\venv\python.exe .\scripts\llm_smoke_test.py
+```
+
+配置模板位于 `execution-plane/config/`，密钥模板位于 `execution-plane/.env.local.example`。真实配置文件 `llm.local.json`、`llm.production.json`、`*.secret.json` 和 `.env.local` 已被 `.gitignore` 忽略。
 
 执行平面依赖记录在:
 

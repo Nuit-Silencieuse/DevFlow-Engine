@@ -17,12 +17,13 @@
 - 与 Java Activity 契约一致的 Python Temporal Activities。
 - Python Activity Worker 启动入口。
 - T019 路径驱动代码库上下文工具。
+- T020 阶段产物落库/展示基础能力由控制平面同步快照提供。
+- T021 可配置 LLM 调用客户端。
 
 当前尚未完成:
 
-- T020 的阶段产物落库/展示基础能力。
-- T021-T026 的真实 Agent 业务逻辑。
-- T027 的 LangGraph Checkpointer 和人工反馈回溯。
+- T022-T027 的真实 Agent 业务逻辑。
+- T028 的 LangGraph Checkpointer 和人工反馈回溯。
 - 与真实 LLM、代码仓库、测试运行器、MR 平台的集成。
 
 ## 包结构
@@ -30,6 +31,7 @@
 | 路径 | 职责 |
 |------|------|
 | `src/context/repository_context.py` | 提供路径驱动代码库上下文工具，支持目录遍历、文件读取、文本搜索和上下文打包 |
+| `src/llm/` | 提供可配置 LLM 调用客户端、Provider 抽象、结构化 JSON 输出解析、Fake Provider 测试能力 |
 | `src/graph/state.py` | 定义 `DevFlowState`，作为 LangGraph 共享状态 |
 | `src/graph/flow.py` | 定义阶段常量、节点函数、状态图构建和单阶段执行入口 |
 | `src/graph/__init__.py` | 导出状态类型、阶段顺序和图构建函数 |
@@ -39,6 +41,61 @@
 | `tests/test_flow.py` | 验证 LangGraph 拓扑和人工反馈注入 |
 | `tests/test_worker.py` | 验证 Activity 注册名和返回契约 |
 | `tests/test_context_tools.py` | 验证代码库上下文工具，并覆盖真实项目仓库检索 |
+| `tests/test_llm_client.py` | 验证 LLM Client 的 Provider 切换、结构化 JSON、错误处理、重试和请求适配 |
+
+## LLM 调用客户端
+
+T021 已在 `execution-plane/src/llm/` 中实现统一 LLM 调用客户端。这个模块不维护流水线阶段状态，也不决定 LangGraph 的路由；它只处理模型调用本身，包括 Provider 选择、请求转换、响应解析、重试和错误归一化。
+
+核心组件:
+
+| 组件 | 职责 |
+|------|------|
+| `LlmClient` | Agent 使用的门面对象，根据请求参数或默认配置选择 Provider，并统一处理重试、超时和结构化输出 |
+| `LlmRequest` | 描述一次模型调用，包含 messages、provider、model、temperature、json_schema、timeout 等字段 |
+| `LlmResponse` | 统一返回文本、结构化 JSON、Provider 名称、模型名、Token 用量和原始元数据摘要 |
+| `LlmProvider` | Provider 抽象接口，屏蔽 OpenAI-compatible、Anthropic-compatible 等不同 HTTP/API 形状 |
+| `FakeProvider` | 测试专用 Provider，用于 TDD 中注入固定响应和异常，不作为生产兜底实现 |
+
+当前文件结构:
+
+| 文件 | 实现说明 |
+|------|----------|
+| `src/llm/messages.py` | 定义 `LlmMessage`、`LlmRequest`、`LlmResponse`，作为 Agent 与 Provider 之间的稳定数据契约 |
+| `src/llm/config.py` | 从环境变量构造 `LlmClientConfig`，并为单次请求派生 Provider/模型 override，避免并发调用污染全局配置 |
+| `src/llm/client.py` | 实现 `LlmClient.complete` 与 `complete_json`，统一执行 Provider 选择、有限重试、Markdown JSON 提取和格式修复 |
+| `src/llm/providers.py` | 实现 OpenAI-compatible、Anthropic-compatible 和 Fake Provider；真实 Provider 使用标准库 HTTP transport，测试可注入 fake transport |
+| `src/llm/errors.py` | 定义统一异常类型和错误文本脱敏函数，避免 API Key 被写入日志或阶段产物 |
+| `src/llm/__init__.py` | 导出 T022-T027 Agent 后续需要依赖的公共 API |
+| `config/llm.test.example.json` | 测试联调用配置模板，只引用 API Key 环境变量名 |
+| `config/llm.production.example.json` | 生产部署配置模板，建议由容器或密钥系统注入真实 API Key |
+| `.env.local.example` | 本地真实 API Key 与真实网络测试开关模板；真实 `.env.local` 被忽略 |
+| `scripts/llm_smoke_test.py` | 手动真实网络冒烟测试入口，输出模型返回的结构化 JSON |
+
+运行时配置:
+
+| 环境变量 | 作用 |
+|----------|------|
+| `DEVFLOW_LLM_PROVIDER` | 默认 Provider，默认值为 `openai_compatible` |
+| `DEVFLOW_LLM_MODEL` | 全局默认模型；单次 `LlmRequest.model` 可覆盖 |
+| `DEVFLOW_LLM_TEMPERATURE` | 默认采样温度 |
+| `DEVFLOW_LLM_TIMEOUT_SECONDS` | 单次请求默认超时 |
+| `DEVFLOW_LLM_MAX_RETRIES` | 客户端内部短周期重试次数 |
+| `DEVFLOW_LLM_JSON_REPAIR_ATTEMPTS` | JSON 格式修复尝试次数 |
+| `DEVFLOW_LLM_CONFIG_FILE` | 可选 JSON 配置文件路径；环境变量会覆盖文件中的同名默认值 |
+| `DEVFLOW_LLM_ENV_FILE` | 可选 dotenv 密钥文件路径；未设置时默认读取 `execution-plane/.env.local` |
+| `DEVFLOW_LLM_OPENAI_API_KEY` / `DEVFLOW_LLM_OPENAI_BASE_URL` / `DEVFLOW_LLM_OPENAI_DEFAULT_MODEL` | OpenAI-compatible Provider 配置 |
+| `DEVFLOW_LLM_ANTHROPIC_API_KEY` / `DEVFLOW_LLM_ANTHROPIC_BASE_URL` / `DEVFLOW_LLM_ANTHROPIC_DEFAULT_MODEL` | Anthropic-compatible Provider 配置 |
+
+真实网络测试默认关闭。只有设置 `DEVFLOW_LLM_INTEGRATION_TEST=1` 并提供对应 Provider 的 API Key 与默认模型时，`tests.test_llm_client.LlmClientRealNetworkTest` 才会访问外部模型服务。
+
+设计边界:
+
+- Temporal 继续负责长周期调度、持久化重试、人工审批和回溯。
+- LangGraph 继续负责单次 Activity 内的节点执行和状态增量合并。
+- LLM Client 只负责模型 I/O，不承担阶段状态转移。
+- T022-T027 Agent 只能通过 `LlmClient` 调用模型，不直接依赖具体 Provider SDK。
+- 不再设计或支持 `RuleBasedRequirementAnalyzer` 作为需求分析实现方式。
 
 ## 运行时调用链路
 
@@ -169,12 +226,12 @@ result_state = run_stage("SYSTEM_DESIGN", state)
 
 | 节点函数 | 写入字段 | 当前实现 |
 |----------|----------|----------|
-| `analyze_requirement_node` | `structured_prd`, `current_step`, `error_logs` | 把原始需求写入 PRD 摘要，占位等待 T021 |
-| `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T022 |
-| `generate_code_node` | `diff_patch`, `current_step`, `error_logs` | 写入代码生成占位文本，等待 T023 |
-| `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T024 |
-| `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T025 |
-| `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T026 |
+| `analyze_requirement_node` | `structured_prd`, `code_context`, `current_step`, `error_logs` | 把原始需求写入 PRD 摘要，占位等待 T022 Requirement Agent |
+| `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T023 Design Agent |
+| `generate_code_node` | `diff_patch`, `current_step`, `error_logs` | 写入代码生成占位文本，等待 T024 Coder Agent |
+| `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T025 Test Agent |
+| `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T026 Review Agent |
+| `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T027 Delivery Agent |
 
 当前每个节点都返回增量字典，而不是直接修改输入对象。这样更符合 LangGraph 的状态更新模型，也便于后续替换为真实 Agent。
 
@@ -372,17 +429,18 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 - T018: 控制平面接收并保存 `repository` 上下文。
 - T019: 执行平面提供路径驱动的代码库上下文工具。
 - T020: 控制平面提供阶段产物落库和展示通道。
-- T021: 将 `analyze_requirement_node` 替换为需求分析 Agent。
-- T022: 将 `design_system_node` 替换为系统设计 Agent。
-- T023: 将 `generate_code_node` 替换为代码生成 Agent。
-- T024: 将 `generate_tests_node` 替换为测试生成 Agent。
-- T025: 将 `review_code_node` 替换为代码评审 Agent。
-- T026: 将 `integrate_delivery_node` 替换为交付集成 Agent。
-- T027: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。
+- T021: 已实现可配置 LLM 调用客户端，支持至少两个 Provider、运行时切换和结构化 JSON 输出。
+- T022: 将 `analyze_requirement_node` 替换为需求分析 Agent。
+- T023: 将 `design_system_node` 替换为系统设计 Agent。
+- T024: 将 `generate_code_node` 替换为代码生成 Agent。
+- T025: 将 `generate_tests_node` 替换为测试生成 Agent。
+- T026: 将 `review_code_node` 替换为代码评审 Agent。
+- T027: 将 `integrate_delivery_node` 替换为交付集成 Agent。
+- T028: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。
 
 ## 代码库上下文工具
 
-T019 已在 `execution-plane/src/context/` 中实现路径驱动的代码库上下文工具，供后续 T021-T026 的真实 Agent 通过工具调用式渐进探索目标仓库。
+T019 已在 `execution-plane/src/context/` 中实现路径驱动的代码库上下文工具，供后续 T022-T027 的真实 Agent 通过工具调用式渐进探索目标仓库。
 
 ### 模块结构
 

@@ -1,0 +1,20 @@
+{
+  "defaultProvider": "openai_compatible",
+  "defaultModel": null,
+  "temperature": 0,
+  "timeoutSeconds": 30,
+  "maxRetries": 0,
+  "jsonRepairAttempts": 1,
+  "providers": {
+    "openai_compatible": {
+      "apiKeyEnv": "DEVFLOW_LLM_OPENAI_API_KEY",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "gpt-4o-mini"
+    },
+    "anthropic_compatible": {
+      "apiKeyEnv": "DEVFLOW_LLM_ANTHROPIC_API_KEY",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "defaultModel": "claude-3-5-haiku-latest"
+    }
+  }
+}

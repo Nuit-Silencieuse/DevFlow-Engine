@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import json
+import re
+import time
+from dataclasses import replace
+from typing import Any, Callable
+
+from .config import LlmClientConfig
+from .errors import (
+    LlmConfigurationError,
+    LlmJsonParseError,
+    LlmProviderError,
+    LlmRateLimitError,
+    LlmTimeoutError,
+)
+from .messages import LlmRequest, LlmResponse
+from .providers import (
+    AnthropicCompatibleProvider,
+    FakeProvider,
+    LlmProvider,
+    OpenAICompatibleProvider,
+)
+
+
+class LlmClient:
+    """Agent 调用 LLM 的唯一门面。
+
+    这个类刻意把 Provider 选择、短周期重试、JSON 格式解析放在 Agent 外部。
+    后续 Requirement/Design/Coder Agent 只需要描述任务和输出 schema，不能
+    直接读取 API Key 或依赖某个厂商 SDK。这样才能在运行时为不同阶段切换
+    Provider，也能用 Fake Provider 做确定性 TDD。
+    """
+
+    def __init__(
+        self,
+        config: LlmClientConfig | None = None,
+        providers: dict[str, LlmProvider] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        self.config = config or LlmClientConfig.from_env()
+        self.providers: dict[str, LlmProvider] = self.default_providers()
+        if providers:
+            self.providers.update(providers)
+        self.sleep = sleep
+
+    @classmethod
+    def from_env(cls) -> "LlmClient":
+        return cls(config=LlmClientConfig.from_env())
+
+    @classmethod
+    def from_sources(
+        cls,
+        config_path: str | None = None,
+        env_file: str | None = None,
+    ) -> "LlmClient":
+        return cls(
+            config=LlmClientConfig.from_sources(
+                config_path=config_path,
+                env_file=env_file,
+            )
+        )
+
+    @staticmethod
+    def default_providers() -> dict[str, LlmProvider]:
+        return {
+            "openai_compatible": OpenAICompatibleProvider(),
+            "anthropic_compatible": AnthropicCompatibleProvider(),
+            "fake": FakeProvider(),
+        }
+
+    def complete_json(self, request: LlmRequest) -> dict[str, Any]:
+        json_request = replace(request, response_format="json")
+        response = self.complete(json_request)
+        if response.parsed_json is None:
+            raise LlmJsonParseError("LLM response did not contain parsed JSON")
+        return response.parsed_json
+
+    def complete(self, request: LlmRequest) -> LlmResponse:
+        provider_name = request.provider or self.config.default_provider
+        provider = self.providers.get(provider_name)
+        if provider is None:
+            raise LlmConfigurationError(f"LLM provider '{provider_name}' is not registered")
+        request_config = self.config.for_request(provider_name, request.model)
+        response = self._complete_with_retries(provider, request, request_config)
+        if request.response_format != "json":
+            return response
+        parsed_json = parse_json_response(
+            response.text,
+            repair_attempts=request_config.json_repair_attempts,
+        )
+        return replace(response, parsed_json=parsed_json)
+
+    def _complete_with_retries(
+        self,
+        provider: LlmProvider,
+        request: LlmRequest,
+        config: LlmClientConfig,
+    ) -> LlmResponse:
+        """执行有限重试，避免和 Temporal Activity 重试叠加成长期阻塞。
+
+        Temporal 已经负责阶段级重试和持久化调度。客户端内部只处理 timeout、
+        rate limit、Provider 5xx 这类短周期错误，而且次数受配置限制。
+        """
+
+        attempt = 0
+        while True:
+            try:
+                return provider.complete(request, config)
+            except (LlmTimeoutError, LlmRateLimitError, LlmProviderError):
+                if attempt >= config.max_retries:
+                    raise
+                self.sleep(min(0.1 * (2**attempt), 2.0))
+                attempt += 1
+
+
+def parse_json_response(text: str, repair_attempts: int = 1) -> dict[str, Any]:
+    candidates = [extract_json_text(text)]
+    if repair_attempts > 0:
+        candidates.append(repair_json_text(candidates[0]))
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if not isinstance(parsed, dict):
+                raise LlmJsonParseError("LLM JSON response root must be an object")
+            return parsed
+        except (json.JSONDecodeError, LlmJsonParseError) as exc:
+            last_error = exc
+    raise LlmJsonParseError(f"LLM response is not valid JSON: {last_error}") from last_error
+
+
+def extract_json_text(text: str) -> str:
+    """提取模型响应中的 JSON 文本。
+
+    很多模型即使被要求返回 JSON，也可能包一层 Markdown fenced code block。
+    这里只处理格式外壳，不补业务字段，避免客户端偷偷变成规则生成器。
+    """
+
+    stripped = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", stripped, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    return stripped
+
+
+def repair_json_text(text: str) -> str:
+    """有限 JSON 格式修复。
+
+    修复范围故意很窄：去掉对象/数组结尾前的尾随逗号，并在响应前后包含
+    说明文字时截取最外层对象。业务字段缺失、类型不对由 Agent validator
+    处理，不能在这里用规则补齐。
+    """
+
+    repaired = re.sub(r",\s*([}\]])", r"\1", text.strip())
+    start = repaired.find("{")
+    end = repaired.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        repaired = repaired[start : end + 1]
+    return repaired

@@ -1,0 +1,20 @@
+{
+  "defaultProvider": "openai_compatible",
+  "defaultModel": null,
+  "temperature": 0.2,
+  "timeoutSeconds": 60,
+  "maxRetries": 2,
+  "jsonRepairAttempts": 1,
+  "providers": {
+    "openai_compatible": {
+      "apiKeyEnv": "DEVFLOW_LLM_OPENAI_API_KEY",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "gpt-4o"
+    },
+    "anthropic_compatible": {
+      "apiKeyEnv": "DEVFLOW_LLM_ANTHROPIC_API_KEY",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "defaultModel": "claude-3-5-sonnet-latest"
+    }
+  }
+}

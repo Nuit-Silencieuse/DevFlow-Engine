@@ -182,6 +182,37 @@ T020 采用“查询触发的状态同步服务”实现短期落库策略:
 
 后续前端控制台任务需要基于这些字段展示阶段产物、代码感知过程和 Approve/Reject 操作。
 
+## LLM 调用客户端方案
+
+T021 新增执行平面的可配置 LLM 调用客户端，详细设计见 [t021-llm-client-design.md](./t021-llm-client-design.md)。该能力是 T022-T027 真实 Agent 的公共基础设施，不绑定某个流水线阶段，也不直接替代 Temporal 或 LangGraph 的状态职责。
+
+设计目标:
+
+1. **Provider 可配置**: 至少支持两个不同模型提供商，首版建议实现 OpenAI-compatible 和 Anthropic-compatible Provider。
+2. **运行时可切换**: 默认 Provider 和模型来自环境变量，单次 `LlmRequest` 可以覆盖 Provider 和模型，便于不同 Agent 使用不同模型策略。
+3. **统一调用契约**: Agent 只依赖 `LlmClient`、`LlmRequest`、`LlmResponse` 和 `LlmProvider`，不直接依赖具体 SDK。
+4. **结构化输出**: 支持 JSON schema 提示、响应解析、有限 JSON 修复和明确错误返回，保证阶段产物可以稳定写入 `outputPayload` 与 JSONB 字段。
+5. **可测试性**: 提供 Fake Provider 用于 TDD 和离线测试，但 Fake Provider 只能通过显式测试配置启用，不能作为生产自动兜底。
+
+执行平面新增目录:
+
+```text
+execution-plane/src/llm/
+├── __init__.py
+├── client.py      # LlmClient 门面，负责 Provider 选择、重试、结构化解析
+├── config.py      # 环境变量与运行时配置
+├── messages.py    # LlmMessage、LlmRequest、LlmResponse 等数据结构
+├── providers.py   # OpenAI-compatible、Anthropic-compatible、Fake Provider
+└── errors.py      # 统一异常类型，避免泄露密钥和底层实现细节
+```
+
+后续 Agent 接入方式:
+
+- T022 Requirement Agent 使用 LLM Client 生成 `structured_prd`，不再支持 `RuleBasedRequirementAnalyzer`。
+- T023 Design Agent 使用 LLM Client 生成 `design_doc`。
+- T024-T027 继续复用同一客户端，根据任务类型选择 Provider、模型、温度和 JSON 输出 schema。
+- Temporal 仍负责持久化调度、重试和人工回溯；LangGraph 仍负责单次 Activity 内的节点编排和状态增量；LLM Client 只负责模型调用、Provider 切换和结构化响应处理。
+
 ## 复杂度跟踪
 
 > **仅在章程检查有必须证明的违规时填写**
