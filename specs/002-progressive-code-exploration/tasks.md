@@ -31,11 +31,11 @@
 
 **关键**: 在此阶段完成之前，不能开始用户故事实现。
 
-- [ ] T019-U006 [P] 在 `execution-plane/tests/test_context_tools.py` 添加 RepositoryExplorationRequest、预算默认值、根目录逃逸防护的失败测试
-- [ ] T019-U007 在 `execution-plane/src/context/repository_context.py` 实现 RepositoryExplorationRequest、ExplorationSession、ExplorationStep、EvidenceItem、CodeContextSummary、SkippedFile、BudgetUsage 数据结构并添加中文注释说明字段语义
-- [ ] T019-U008 在 `execution-plane/src/context/repository_context.py` 实现路径规范化、rootPath 边界校验、默认排除规则和预算配置解析
-- [ ] T019-U009 在 `execution-plane/src/context/__init__.py` 导出渐进探索数据结构和工具函数，供 RequirementAgent 与测试直接复用
-- [ ] T019-U010 在 `execution-plane/tests/test_context_tools.py` 验证阶段 2 基础测试通过，并确保测试覆盖非法路径、默认预算和默认排除规则
+- [X] T019-U006 [P] 在 `execution-plane/tests/test_context_tools.py` 添加 RepositoryExplorationRequest、预算默认值、根目录逃逸防护的失败测试
+- [X] T019-U007 在 `execution-plane/src/context/repository_context.py` 实现 RepositoryExplorationRequest、ExplorationSession、ExplorationStep、EvidenceItem、CodeContextSummary、SkippedFile、BudgetUsage 数据结构并添加中文注释说明字段语义
+- [X] T019-U008 在 `execution-plane/src/context/repository_context.py` 实现路径规范化、rootPath 边界校验、默认排除规则和预算配置解析
+- [X] T019-U009 在 `execution-plane/src/context/__init__.py` 导出渐进探索数据结构和工具函数，供 RequirementAgent 与测试直接复用
+- [X] T019-U010 在 `execution-plane/tests/test_context_tools.py` 验证阶段 2 基础测试通过，并确保测试覆盖非法路径、默认预算和默认排除规则
 
 **检查点**: 上下文请求模型、安全边界和预算基础就绪。
 

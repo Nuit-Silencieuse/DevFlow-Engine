@@ -1,13 +1,227 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_MAX_FILES = 200
 DEFAULT_MAX_BYTES = 1_048_576
+DEFAULT_MAX_ROUNDS = 4
+DEFAULT_MAX_SEARCHES = 8
+DEFAULT_MAX_SEARCH_RESULTS = 30
+
+DEFAULT_EXCLUDE_PATHS = (
+    ".git",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".devflow-test-env",
+    "logs",
+    "*.pyc",
+    "*.class",
+    "*.jar",
+    "*.log",
+    ".env",
+    ".env.*",
+    "*secret*",
+    "*key*",
+)
+
+VALID_PRIVACY_MODES = ("standard", "strict")
+
+
+@dataclass(frozen=True)
+class ExplorationBudget:
+    """一次渐进探索的硬预算。
+
+    这些字段不是给 LLM 的建议，而是工具层必须执行的上限。Agent 可以决定
+    下一步要读什么，但不能绕过轮次、文件数、字节数和搜索结果数的限制。
+    """
+
+    max_rounds: int = DEFAULT_MAX_ROUNDS
+    max_files: int = DEFAULT_MAX_FILES
+    max_bytes: int = DEFAULT_MAX_BYTES
+    max_searches: int = DEFAULT_MAX_SEARCHES
+    max_search_results: int = DEFAULT_MAX_SEARCH_RESULTS
+
+
+@dataclass(frozen=True)
+class BudgetUsage:
+    """记录当前探索已经消耗的预算，供 trace、前端展示和降级判断使用。"""
+
+    rounds_used: int = 0
+    files_read: int = 0
+    bytes_read: int = 0
+    searches_used: int = 0
+
+
+@dataclass(frozen=True)
+class RepositoryExplorationRequest:
+    """渐进式代码感知入口请求。
+
+    常规用户只需要 root_path。include/exclude/target/budget 都是高级约束，
+    它们只能收窄或优先排序探索范围，不能扩大 root_path 之外的访问权限。
+    """
+
+    root_path: Path
+    include_paths: tuple[str, ...] = ()
+    exclude_paths: tuple[str, ...] = ()
+    target_files: tuple[str, ...] = ()
+    budget: ExplorationBudget = field(default_factory=ExplorationBudget)
+    privacy_mode: str = "standard"
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any] | None) -> "RepositoryExplorationRequest | None":
+        if not data:
+            return None
+
+        root_path = data.get("rootPath") or data.get("root_path")
+        if not root_path:
+            raise ValueError("repository.rootPath is required")
+
+        request = cls(
+            root_path=Path(root_path),
+            include_paths=_normalize_paths(data.get("includePaths") or data.get("include_paths")),
+            exclude_paths=_normalize_paths(data.get("excludePaths") or data.get("exclude_paths")),
+            target_files=_normalize_paths(data.get("targetFiles") or data.get("target_files")),
+            budget=ExplorationBudget(
+                max_rounds=_positive_int(
+                    data.get("maxRounds") or data.get("max_rounds"),
+                    DEFAULT_MAX_ROUNDS,
+                    "maxRounds",
+                ),
+                max_files=_positive_int(
+                    data.get("maxFiles") or data.get("max_files"),
+                    DEFAULT_MAX_FILES,
+                    "maxFiles",
+                ),
+                max_bytes=_positive_int(
+                    data.get("maxBytes") or data.get("max_bytes"),
+                    DEFAULT_MAX_BYTES,
+                    "maxBytes",
+                ),
+                max_searches=_positive_int(
+                    data.get("maxSearches") or data.get("max_searches"),
+                    DEFAULT_MAX_SEARCHES,
+                    "maxSearches",
+                ),
+                max_search_results=_positive_int(
+                    data.get("maxSearchResults") or data.get("max_search_results"),
+                    DEFAULT_MAX_SEARCH_RESULTS,
+                    "maxSearchResults",
+                ),
+            ),
+            privacy_mode=str(data.get("privacyMode") or data.get("privacy_mode") or "standard"),
+        )
+        request.validate()
+        return request
+
+    @property
+    def resolved_root(self) -> Path:
+        return self.root_path.expanduser().resolve()
+
+    @property
+    def effective_include_paths(self) -> tuple[str, ...]:
+        return self.include_paths or (".",)
+
+    @property
+    def effective_exclude_paths(self) -> tuple[str, ...]:
+        return _combined_exclude_paths(self.exclude_paths)
+
+    def validate(self) -> None:
+        root = self.resolved_root
+        if not root.exists() or not root.is_dir():
+            raise ValueError(f"Repository root does not exist or is not a directory: {self.root_path}")
+
+        if self.privacy_mode not in VALID_PRIVACY_MODES:
+            raise ValueError(f"Unsupported privacyMode: {self.privacy_mode}")
+
+        # 这里不要求 include/exclude/target 指向的文件一定存在；它们可能是用户
+        # 预先设置的范围。但必须先解析并确认没有逃逸 root_path。
+        for relative_path in (
+            *self.include_paths,
+            *self.exclude_paths,
+            *self.target_files,
+        ):
+            _resolve_inside_root(root, relative_path)
+
+
+@dataclass(frozen=True)
+class ExplorationSession:
+    """一次需求分析阶段内的代码探索会话状态。"""
+
+    session_id: str
+    pipeline_id: str
+    stage_name: str
+    requirement: str
+    status: str = "PLANNED"
+    budget: ExplorationBudget = field(default_factory=ExplorationBudget)
+    budget_usage: BudgetUsage = field(default_factory=BudgetUsage)
+    confidence: float = 0.0
+    created_at: str | None = None
+    completed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ExplorationStep:
+    """一次可审计的 Agent 决策或工具调用记录。"""
+
+    step_index: int
+    round_index: int
+    action_type: str
+    reason: str
+    input: Mapping[str, Any] = field(default_factory=dict)
+    result_summary: str = ""
+    selected_files: tuple[str, ...] = ()
+    skipped_files: tuple["SkippedFile", ...] = ()
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceItem:
+    """支持需求分析结论的代码证据。"""
+
+    file_path: str
+    line_start: int | None = None
+    line_end: int | None = None
+    symbol_name: str | None = None
+    excerpt: str = ""
+    relevance_reason: str = ""
+    supports: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkippedFile:
+    """记录被安全规则、预算或文件类型策略跳过的路径。"""
+
+    path: str
+    reason: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class CodeContextSummary:
+    """最终注入需求分析和控制平面阶段产物的代码上下文摘要。"""
+
+    root_path: str
+    status: str = "COMPLETE"
+    search_queries: tuple[str, ...] = ()
+    inspected_files: tuple[str, ...] = ()
+    candidate_files: tuple[str, ...] = ()
+    evidence: tuple[EvidenceItem, ...] = ()
+    skipped_paths: tuple[SkippedFile, ...] = ()
+    budget_usage: BudgetUsage = field(default_factory=BudgetUsage)
+    confidence: float = 0.0
+    open_questions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -241,9 +455,11 @@ def _collect_files(
 
 def _is_excluded(relative_path: str, exclude_paths: Iterable[str]) -> bool:
     normalized = _normalize_path(relative_path)
-    for exclude_path in exclude_paths:
+    for exclude_path in _combined_exclude_paths(exclude_paths):
         excluded = _normalize_path(exclude_path)
         if normalized == excluded or normalized.startswith(f"{excluded}/"):
+            return True
+        if fnmatch(normalized, excluded) or fnmatch(Path(normalized).name, excluded):
             return True
     return False
 
@@ -276,3 +492,16 @@ def _ordered_unique(paths: Iterable[str]) -> list[str]:
             seen.add(normalized)
             result.append(normalized)
     return result
+
+
+def _combined_exclude_paths(exclude_paths: Iterable[str]) -> tuple[str, ...]:
+    return tuple(_ordered_unique([*DEFAULT_EXCLUDE_PATHS, *exclude_paths]))
+
+
+def _positive_int(value: Any, default: int, field_name: str) -> int:
+    if value is None:
+        return default
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return parsed
