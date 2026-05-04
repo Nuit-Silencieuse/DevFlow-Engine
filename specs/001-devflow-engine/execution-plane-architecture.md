@@ -19,10 +19,11 @@
 - T019 路径驱动代码库上下文工具。
 - T020 阶段产物落库/展示基础能力由控制平面同步快照提供。
 - T021 可配置 LLM 调用客户端。
+- T022 Requirement Agent。
 
 当前尚未完成:
 
-- T022-T027 的真实 Agent 业务逻辑。
+- T023-T027 的真实 Agent 业务逻辑。
 - T028 的 LangGraph Checkpointer 和人工反馈回溯。
 - 与真实 LLM、代码仓库、测试运行器、MR 平台的集成。
 
@@ -31,6 +32,7 @@
 | 路径 | 职责 |
 |------|------|
 | `src/context/repository_context.py` | 提供路径驱动代码库上下文工具，支持目录遍历、文件读取、文本搜索和上下文打包 |
+| `src/agents/requirement_agent.py` | 实现需求分析 Agent，调用 LLM Client 生成结构化 PRD，并写入代码上下文证据 |
 | `src/llm/` | 提供可配置 LLM 调用客户端、Provider 抽象、结构化 JSON 输出解析、Fake Provider 测试能力 |
 | `src/graph/state.py` | 定义 `DevFlowState`，作为 LangGraph 共享状态 |
 | `src/graph/flow.py` | 定义阶段常量、节点函数、状态图构建和单阶段执行入口 |
@@ -42,6 +44,7 @@
 | `tests/test_worker.py` | 验证 Activity 注册名和返回契约 |
 | `tests/test_context_tools.py` | 验证代码库上下文工具，并覆盖真实项目仓库检索 |
 | `tests/test_llm_client.py` | 验证 LLM Client 的 Provider 切换、结构化 JSON、错误处理、重试和请求适配 |
+| `tests/test_requirement_agent.py` | 验证 Requirement Agent 的结构化 PRD、空需求诊断、真实项目仓库上下文、flow 和 Activity 集成 |
 
 ## LLM 调用客户端
 
@@ -226,7 +229,7 @@ result_state = run_stage("SYSTEM_DESIGN", state)
 
 | 节点函数 | 写入字段 | 当前实现 |
 |----------|----------|----------|
-| `analyze_requirement_node` | `structured_prd`, `code_context`, `current_step`, `error_logs` | 把原始需求写入 PRD 摘要，占位等待 T022 Requirement Agent |
+| `analyze_requirement_node` | `structured_prd`, `code_context`, `current_step`, `error_logs` | 已调用 T022 Requirement Agent，通过 LLM Client 生成结构化 PRD，并记录上下文证据 |
 | `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T023 Design Agent |
 | `generate_code_node` | `diff_patch`, `current_step`, `error_logs` | 写入代码生成占位文本，等待 T024 Coder Agent |
 | `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T025 Test Agent |
@@ -430,7 +433,7 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 - T019: 执行平面提供路径驱动的代码库上下文工具。
 - T020: 控制平面提供阶段产物落库和展示通道。
 - T021: 已实现可配置 LLM 调用客户端，支持至少两个 Provider、运行时切换和结构化 JSON 输出。
-- T022: 将 `analyze_requirement_node` 替换为需求分析 Agent。
+- T022: 已将 `analyze_requirement_node` 替换为需求分析 Agent。
 - T023: 将 `design_system_node` 替换为系统设计 Agent。
 - T024: 将 `generate_code_node` 替换为代码生成 Agent。
 - T025: 将 `generate_tests_node` 替换为测试生成 Agent。

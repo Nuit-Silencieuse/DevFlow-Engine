@@ -1,8 +1,22 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from src.workers.activities import analyze_requirement, registered_activities, _state_from_request
 from src.workers.worker import TASK_QUEUE
+
+
+class StubRequirementAgent:
+    def run(self, state):
+        return {
+            "structured_prd": {
+                "summary": state.get("original_requirement", ""),
+                "source": "requirement_agent",
+            },
+            "code_context": {"inspected_files": [], "search_queries": [], "source": "requirement_agent"},
+            "current_step": "REQUIREMENT_ANALYSIS",
+            "error_logs": [],
+        }
 
 
 class TemporalWorkerActivitiesTest(unittest.TestCase):
@@ -26,22 +40,24 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertEqual(TASK_QUEUE, "DEVFLOW_TASK_QUEUE")
 
     def test_activity_returns_java_stage_execution_result_shape(self):
-        result = asyncio.run(
-            analyze_requirement(
-                {
-                    "pipelineId": "00000000-0000-0000-0000-000000000001",
-                    "stageName": "REQUIREMENT_ANALYSIS",
-                    "requirement": "实现用户登录、注册和鉴权",
-                    "globalContext": {},
-                    "previousOutput": {},
-                }
+        with patch("src.graph.flow.RequirementAgent", StubRequirementAgent):
+            result = asyncio.run(
+                analyze_requirement(
+                    {
+                        "pipelineId": "00000000-0000-0000-0000-000000000001",
+                        "stageName": "REQUIREMENT_ANALYSIS",
+                        "requirement": "实现用户登录、注册和鉴权",
+                        "globalContext": {},
+                        "previousOutput": {},
+                    }
+                )
             )
-        )
 
         self.assertEqual(result["stageName"], "REQUIREMENT_ANALYSIS")
         self.assertEqual(result["status"], "COMPLETED")
         self.assertIn("outputPayload", result)
         self.assertIn("structured_prd", result["outputPayload"])
+        self.assertIn("code_context", result["outputPayload"])
 
     def test_state_from_request_exposes_repository_context_to_agents(self):
         state = _state_from_request(

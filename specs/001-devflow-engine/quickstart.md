@@ -130,6 +130,7 @@ Python 执行平面位于 `execution-plane`。当前本地虚拟环境为 Python
 - `tests/test_worker.py`: 验证 Temporal Activity 注册名与 Java 契约一致，并验证 Activity 返回 `StageExecutionResult` 形状。
 - `tests/test_context_tools.py`: 验证路径驱动代码库上下文工具，包括目录遍历、文件读取、文本搜索、上下文打包、越界路径拒绝，以及对当前真实项目仓库的 `RepositoryContext.java` 检索。
 - `tests/test_llm_client.py`: 验证 LLM 调用客户端的 Fake Provider、运行时 Provider 切换、Markdown JSON 提取、解析失败、短周期重试、敏感信息脱敏，以及 OpenAI-compatible/Anthropic-compatible Provider 的请求适配。
+- `tests/test_requirement_agent.py`: 验证 Requirement Agent 的 Fake LLM 结构化 PRD、空需求诊断、当前项目代码库上下文材料、flow 节点和 Activity 输出集成。
 
 默认执行平面测试不会访问真实 LLM 网络。真实 API Key/网络冒烟测试需要显式开启:
 
@@ -148,6 +149,29 @@ Copy-Item .\config\llm.test.example.json .\config\llm.local.json
 ```
 
 配置模板位于 `execution-plane/config/`，密钥模板位于 `execution-plane/.env.local.example`。真实配置文件 `llm.local.json`、`llm.production.json`、`*.secret.json` 和 `.env.local` 已被 `.gitignore` 忽略。
+
+如果需要观察 LLM 请求消息、模型响应和 Agent 中间产物，在 `.env.local` 中开启:
+
+```env
+DEVFLOW_LLM_TRACE=1
+DEVFLOW_LLM_TRACE_STDOUT=1
+DEVFLOW_LLM_TRACE_FILE=./logs/llm-trace.jsonl
+```
+
+开启后，测试会把 `llm.request`、`llm.response`、`requirement_agent.context_pack`、`requirement_agent.analysis_plan`、`requirement_agent.validation_report` 等事件打印到终端，并写入 `execution-plane/logs/llm-trace.jsonl`。日志会脱敏 API Key。
+
+Requirement Agent 的真实效果测试:
+
+```powershell
+.\venv\python.exe -m unittest tests.test_requirement_agent.RequirementAgentEffectTest
+```
+
+该测试使用当前 DevFlow-Engine 代码库作为 `repository_context`，终端输出效果摘要和 LLM 消息预览，完整中间产物写入:
+
+- `execution-plane/logs/requirement-agent-effect.jsonl`
+- `execution-plane/logs/requirement-agent-effect-result.json`
+
+如果需要完整 JSONL 事件也直接打印到终端，可设置 `DEVFLOW_REQUIREMENT_AGENT_EFFECT_FULL_STDOUT=1`。
 
 执行平面依赖记录在:
 

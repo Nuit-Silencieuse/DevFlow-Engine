@@ -16,6 +16,7 @@ from .providers import (
     LlmProvider,
     OpenAICompatibleProvider,
 )
+from .tracing import LlmTraceRecorder
 
 __all__ = [
     "AnthropicCompatibleProvider",
@@ -33,6 +34,7 @@ __all__ = [
     "LlmRequest",
     "LlmResponse",
     "LlmTimeoutError",
+    "LlmTraceRecorder",
     "OpenAICompatibleProvider",
     "extract_json_text",
     "parse_json_response",

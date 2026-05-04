@@ -1,13 +1,34 @@
 import unittest
+from unittest.mock import patch
 
 from src.graph.flow import build_devflow_graph, run_stage
 
 
+class StubRequirementAgent:
+    def run(self, state):
+        return {
+            "structured_prd": {
+                "summary": state.get("original_requirement", ""),
+                "acceptance_criteria": [
+                    {
+                        "id": "AC-001",
+                        "description": "需求已结构化",
+                        "verification": "检查 structured_prd",
+                    }
+                ],
+                "source": "requirement_agent",
+            },
+            "code_context": {"inspected_files": [], "search_queries": [], "source": "requirement_agent"},
+            "current_step": "REQUIREMENT_ANALYSIS",
+            "error_logs": state.get("error_logs", []),
+        }
+
+
 class DevFlowGraphTest(unittest.TestCase):
     def test_graph_runs_all_pipeline_nodes_in_order(self):
-        graph = build_devflow_graph()
-
-        result = graph.invoke({"original_requirement": "实现用户登录、注册和鉴权"})
+        with patch("src.graph.flow.RequirementAgent", StubRequirementAgent):
+            graph = build_devflow_graph()
+            result = graph.invoke({"original_requirement": "实现用户登录、注册和鉴权"})
 
         self.assertEqual(result["current_step"], "DELIVERY_INTEGRATION")
         self.assertIn("structured_prd", result)

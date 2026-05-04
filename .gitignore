@@ -64,6 +64,8 @@ execution-plane/.test_tmp/
 execution-plane/config/llm.local.json
 execution-plane/config/llm.production.json
 execution-plane/config/*.secret.json
+execution-plane/logs/
+execution-plane/*.jsonl
 
 # Specify
 .specify/tmp/

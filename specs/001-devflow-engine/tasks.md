@@ -53,7 +53,7 @@ description: "基于设计制品生成的开发任务列表"
 - [x] T019 [US1] 在 Python 执行平面实现路径驱动的代码库上下文工具 (`execution-plane/src/context/`)，支持目录遍历、文件读取、文本搜索和上下文打包
 - [x] T020 [US1] 在 Java 控制平面实现阶段中间产物落库与展示通道，将 Activity `outputPayload` 同步到 `Stage.output_payload` 并通过状态查询/检查点 API 暴露
 - [x] T021 [US1] 在 Python 执行平面实现可配置 LLM 调用客户端 (`execution-plane/src/llm/`)，支持至少两个 Provider、运行时切换、结构化 JSON 输出和可测试的 Fake Provider
-- [ ] T022 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
+- [x] T022 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
 - [ ] T023 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
 - [ ] T024 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)
 - [ ] T025 [US1] 实现负责测试生成的 Agent 节点逻辑 (`execution-plane/src/agents/test_agent.py`)

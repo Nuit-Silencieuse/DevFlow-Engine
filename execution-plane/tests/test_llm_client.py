@@ -1,5 +1,6 @@
 import json
 import os
+import unittest.mock
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from src.llm import (
     LlmMessage,
     LlmProviderError,
     LlmRequest,
+    LlmTraceRecorder,
     OpenAICompatibleProvider,
 )
 from src.llm.config import (
@@ -83,6 +85,56 @@ class LlmClientTest(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "READY")
+
+    def test_trace_recorder_writes_messages_to_stdout_and_file_with_redaction(self):
+        trace_path = Path(".test_tmp") / "llm-trace.jsonl"
+        if trace_path.exists():
+            trace_path.unlink()
+        recorder = LlmTraceRecorder(
+            enabled=True,
+            stdout=True,
+            file_path=trace_path,
+            secrets=["sk-secret-value"],
+        )
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=0),
+            providers={"fake": FakeProvider(response_text='{"ok": true}')},
+            trace_recorder=recorder,
+        )
+
+        with unittest.mock.patch("builtins.print") as mocked_print:
+            result = client.complete_json(
+                LlmRequest(
+                    task="trace_test",
+                    messages=(LlmMessage("user", "key=sk-secret-value, 请返回 JSON"),),
+                )
+            )
+
+        self.assertEqual(result, {"ok": True})
+        printed = "\n".join(call.args[0] for call in mocked_print.call_args_list)
+        file_content = trace_path.read_text(encoding="utf-8")
+        self.assertIn("llm.request", printed)
+        self.assertIn("llm.response", file_content)
+        self.assertIn("[REDACTED]", file_content)
+        self.assertNotIn("sk-secret-value", printed)
+        self.assertNotIn("sk-secret-value", file_content)
+
+    def test_trace_redaction_keeps_usage_token_counts(self):
+        recorder = LlmTraceRecorder(
+            enabled=True,
+            secrets=["sk-secret-value"],
+        )
+
+        payload = recorder.redact(
+            {
+                "api_key": "sk-secret-value",
+                "usage": {"prompt_tokens": 10, "total_tokens": 12},
+            }
+        )
+
+        self.assertEqual(payload["api_key"], "[REDACTED]")
+        self.assertEqual(payload["usage"]["prompt_tokens"], 10)
+        self.assertEqual(payload["usage"]["total_tokens"], 12)
 
     def test_invalid_json_raises_parse_error(self):
         client = LlmClient(

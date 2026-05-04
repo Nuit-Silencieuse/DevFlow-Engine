@@ -21,6 +21,7 @@ from .providers import (
     LlmProvider,
     OpenAICompatibleProvider,
 )
+from .tracing import LlmTraceRecorder
 
 
 class LlmClient:
@@ -37,12 +38,14 @@ class LlmClient:
         config: LlmClientConfig | None = None,
         providers: dict[str, LlmProvider] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        trace_recorder: LlmTraceRecorder | None = None,
     ):
         self.config = config or LlmClientConfig.from_env()
         self.providers: dict[str, LlmProvider] = self.default_providers()
         if providers:
             self.providers.update(providers)
         self.sleep = sleep
+        self.trace_recorder = trace_recorder or LlmTraceRecorder.from_sources()
 
     @classmethod
     def from_env(cls) -> "LlmClient":
@@ -82,14 +85,45 @@ class LlmClient:
         if provider is None:
             raise LlmConfigurationError(f"LLM provider '{provider_name}' is not registered")
         request_config = self.config.for_request(provider_name, request.model)
+        provider_settings = request_config.settings_for(provider_name)
+        self.trace_recorder.record(
+            "llm.request",
+            {
+                "task": request.task,
+                "provider": provider_name,
+                "model": request.model
+                or request_config.default_model
+                or provider_settings.get("default_model"),
+                "response_format": request.response_format,
+                "temperature": request.temperature
+                if request.temperature is not None
+                else request_config.temperature,
+                "timeout_seconds": request.timeout_seconds or request_config.timeout_seconds,
+                "metadata": request.metadata,
+                "messages": [
+                    {"role": message.role, "content": message.content}
+                    for message in request.messages
+                ],
+                "json_schema": request.json_schema,
+            },
+        )
         response = self._complete_with_retries(provider, request, request_config)
         if request.response_format != "json":
+            self.trace_recorder.record(
+                "llm.response",
+                response_to_trace_payload(request, response),
+            )
             return response
         parsed_json = parse_json_response(
             response.text,
             repair_attempts=request_config.json_repair_attempts,
         )
-        return replace(response, parsed_json=parsed_json)
+        parsed_response = replace(response, parsed_json=parsed_json)
+        self.trace_recorder.record(
+            "llm.response",
+            response_to_trace_payload(request, parsed_response),
+        )
+        return parsed_response
 
     def _complete_with_retries(
         self,
@@ -159,3 +193,16 @@ def repair_json_text(text: str) -> str:
     if start != -1 and end != -1 and start < end:
         repaired = repaired[start : end + 1]
     return repaired
+
+
+def response_to_trace_payload(request: LlmRequest, response: LlmResponse) -> dict[str, Any]:
+    return {
+        "task": request.task,
+        "provider": response.provider,
+        "model": response.model,
+        "text": response.text,
+        "parsed_json": response.parsed_json,
+        "usage": response.usage,
+        "latency_ms": response.latency_ms,
+        "request_id": response.request_id,
+    }

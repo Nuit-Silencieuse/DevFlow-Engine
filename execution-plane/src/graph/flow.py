@@ -5,6 +5,8 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from src.agents import RequirementAgent
+
 from .state import DevFlowState
 
 
@@ -28,16 +30,7 @@ STAGE_ORDER = [
 
 
 def analyze_requirement_node(state: DevFlowState) -> DevFlowState:
-    requirement = state.get("original_requirement", "")
-    return {
-        "structured_prd": {
-            "summary": requirement,
-            "acceptance_criteria": [],
-            "source": "placeholder_requirement_agent",
-        },
-        "current_step": REQUIREMENT_ANALYSIS,
-        "error_logs": state.get("error_logs", []),
-    }
+    return RequirementAgent().run(state)
 
 
 def design_system_node(state: DevFlowState) -> DevFlowState:

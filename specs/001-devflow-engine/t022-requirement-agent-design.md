@@ -2,7 +2,19 @@
 
 本文档定义 T022 的实现方案。目标是在 `execution-plane/src/agents/requirement_agent.py` 中实现负责 `REQUIREMENT_ANALYSIS` 阶段的 LangGraph Agent，并替换 `execution-plane/src/graph/flow.py` 中当前的占位逻辑。
 
-本任务当前只做设计，不实现代码，也不将 `tasks.md` 中 T022 标记为完成。T022 依赖 T021 的可配置 LLM 调用客户端，不再设计或支持规则模板型 `RuleBasedRequirementAnalyzer`。
+T022 依赖 T021 的可配置 LLM 调用客户端，不再设计或支持规则模板型 `RuleBasedRequirementAnalyzer`。
+
+## 实现状态
+
+T022 已完成首版实现:
+
+- `execution-plane/src/agents/requirement_agent.py` 实现 `RequirementAgent`、内部 LangGraph 子图、上下文收集、LLM PRD 生成、结构校验和有界修复。
+- `execution-plane/src/graph/flow.py` 的 `analyze_requirement_node` 已替换为 `RequirementAgent().run(state)`。
+- `execution-plane/src/workers/activities.py` 的 `REQUIREMENT_ANALYSIS` 输出已包含 `structured_prd` 和 `code_context`。
+- `execution-plane/tests/test_requirement_agent.py` 覆盖 Fake LLM、空需求、真实项目仓库上下文、flow 集成和 Activity 输出。
+- 已使用当前项目代码库作为 `repository_context` 材料运行真实 LLM 测试，生成结构化 PRD，并记录实际检查文件。
+- 支持 LLM Trace 输出 Requirement Agent 中间产物，包括 `context_pack`、`analysis_plan`、`draft_prd` 和 `validation_report`。
+- `RequirementAgentEffectTest` 提供真实效果测试，终端输出摘要和 LLM 消息预览，完整 trace 写入 `logs/requirement-agent-effect.jsonl`，最终 PRD 写入 `logs/requirement-agent-effect-result.json`。
 
 ## 设计目标
 

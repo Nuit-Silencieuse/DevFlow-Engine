@@ -28,6 +28,7 @@ T021 已完成首版实现:
 - `execution-plane/config/llm.test.example.json` 和 `execution-plane/config/llm.production.example.json` 提供测试/生产配置模板。
 - `execution-plane/.env.local.example` 提供本地真实 API Key 配置模板，真实 `.env.local` 不进入版本库。
 - `execution-plane/scripts/llm_smoke_test.py` 提供手动真实网络冒烟测试入口。
+- LLM Trace 支持通过 `DEVFLOW_LLM_TRACE` 同时输出终端和 JSONL 日志，记录 LLM messages、响应和解析结果，并自动脱敏密钥。
 
 首版没有新增第三方 HTTP 依赖，真实 Provider 适配器使用 Python 标准库 `urllib`；测试通过注入 fake transport 验证请求形状，不访问真实网络。
 
@@ -421,6 +422,23 @@ LLM Client 负责:
 - OpenAI-compatible 需要 `DEVFLOW_LLM_OPENAI_API_KEY` 和 `DEVFLOW_LLM_OPENAI_DEFAULT_MODEL`。
 - Anthropic-compatible 需要 `DEVFLOW_LLM_ANTHROPIC_API_KEY` 和 `DEVFLOW_LLM_ANTHROPIC_DEFAULT_MODEL`。
 - 本地也可以运行 `python scripts/llm_smoke_test.py --config config/llm.local.json`。
+
+### Trace 输出
+
+真实 LLM 调试时可开启:
+
+```text
+DEVFLOW_LLM_TRACE=1
+DEVFLOW_LLM_TRACE_STDOUT=1
+DEVFLOW_LLM_TRACE_FILE=./logs/llm-trace.jsonl
+```
+
+`LlmClient` 会记录:
+
+- `llm.request`: task、provider、model、metadata、messages、json_schema。
+- `llm.response`: text、parsed_json、usage、latency_ms、request_id。
+
+日志写入前会递归脱敏 API Key、Token、Authorization 等敏感字段。`DEVFLOW_LLM_TRACE_MAX_CHARS` 可限制单个字符串最大长度，防止大上下文日志过度膨胀。
 
 ## 文档与注释要求
 

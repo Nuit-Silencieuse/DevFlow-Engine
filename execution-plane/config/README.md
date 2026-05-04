@@ -63,3 +63,44 @@ Anthropic-compatible Provider:
 ```
 
 测试只校验 Provider 能返回合法 JSON，不会打印 API Key。
+
+## 中间产物与 LLM 消息追踪
+
+需要观察真实 LLM 到底发生了什么时，可以在 `.env.local` 中打开追踪:
+
+```env
+DEVFLOW_LLM_TRACE=1
+DEVFLOW_LLM_TRACE_STDOUT=1
+DEVFLOW_LLM_TRACE_FILE=./logs/llm-trace.jsonl
+DEVFLOW_LLM_TRACE_MAX_CHARS=50000
+```
+
+追踪内容包括:
+
+- `llm.request`: Provider、模型、任务名、JSON schema、完整 LLM messages。
+- `llm.response`: 模型原始文本、解析后的 JSON、usage、latency。
+- `requirement_agent.context_pack`: 代码库上下文包和实际检查文件。
+- `requirement_agent.analysis_plan`: 需求分析计划。
+- `requirement_agent.draft_prd`: LLM 初稿 PRD。
+- `requirement_agent.validation_report`: PRD 结构校验结果。
+
+日志文件是 JSONL 格式，每行一个事件。相对路径会按 `execution-plane/` 解析，例如 `./logs/llm-trace.jsonl` 会写入 `execution-plane/logs/llm-trace.jsonl`。API Key、Token、Authorization 等敏感字段会在写出前脱敏。
+
+## Requirement Agent 效果测试
+
+`tests/test_requirement_agent.py` 中提供真实效果测试，使用当前项目代码库作为上下文材料，并强制写出中间产物:
+
+```powershell
+.\venv\python.exe -m unittest tests.test_requirement_agent.RequirementAgentEffectTest
+```
+
+输出文件:
+
+- `logs/requirement-agent-effect.jsonl`: 完整 trace，包含 LLM messages、模型响应、context_pack、analysis_plan、draft_prd、validation_report。
+- `logs/requirement-agent-effect-result.json`: 最终 `DevFlowState` 增量，便于直接查看 `structured_prd` 和 `code_context`。
+
+终端默认打印摘要和 LLM 消息预览。如果确实需要把完整 JSONL 事件也打印到终端:
+
+```env
+DEVFLOW_REQUIREMENT_AGENT_EFFECT_FULL_STDOUT=1
+```
