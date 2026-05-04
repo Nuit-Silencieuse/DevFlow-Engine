@@ -17,11 +17,11 @@
 
 **目的**: 为渐进探索工具准备可重复的本地测试仓库和测试入口。
 
-- [ ] T019-U001 [P] 在 `execution-plane/tests/fixtures/progressive_repo/README.md` 创建测试仓库说明，描述健康检查、控制平面、执行平面三个模拟模块
-- [ ] T019-U002 [P] 在 `execution-plane/tests/fixtures/progressive_repo/src/health_service.py` 创建可被业务关键词命中的代表性代码文件
-- [ ] T019-U003 [P] 在 `execution-plane/tests/fixtures/progressive_repo/src/temporal_worker.py` 创建 worker 状态相关代表性代码文件
-- [ ] T019-U004 [P] 在 `execution-plane/tests/fixtures/progressive_repo/node_modules/ignored.js` 创建默认排除目录样例文件
-- [ ] T019-U005 [P] 在 `execution-plane/tests/fixtures/progressive_repo/logs/runtime.log` 创建默认排除日志样例文件
+- [X] T019-U001 [P] 在 `execution-plane/tests/fixtures/progressive_repo/README.md` 创建测试仓库说明，描述健康检查、控制平面、执行平面三个模拟模块
+- [X] T019-U002 [P] 在 `execution-plane/tests/fixtures/progressive_repo/src/health_service.py` 创建可被业务关键词命中的代表性代码文件
+- [X] T019-U003 [P] 在 `execution-plane/tests/fixtures/progressive_repo/src/temporal_worker.py` 创建 worker 状态相关代表性代码文件
+- [X] T019-U004 [P] 在 `execution-plane/tests/fixtures/progressive_repo/node_modules/ignored.js` 创建默认排除目录样例文件
+- [X] T019-U005 [P] 在 `execution-plane/tests/fixtures/progressive_repo/logs/runtime.log` 创建默认排除日志样例文件
 
 ---
 

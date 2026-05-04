@@ -68,6 +68,14 @@ execution-plane/config/*.secret.json
 execution-plane/logs/
 execution-plane/*.jsonl
 
+# Test fixtures intentionally contain ignored directory names and log files.
+!execution-plane/tests/fixtures/
+!execution-plane/tests/fixtures/progressive_repo/
+!execution-plane/tests/fixtures/progressive_repo/node_modules/
+!execution-plane/tests/fixtures/progressive_repo/node_modules/ignored.js
+!execution-plane/tests/fixtures/progressive_repo/logs/
+!execution-plane/tests/fixtures/progressive_repo/logs/runtime.log
+
 # Specify
 .specify/tmp/
 .specify-gemini/tmp/
