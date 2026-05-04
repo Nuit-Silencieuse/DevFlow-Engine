@@ -1,0 +1,399 @@
+:root {
+  color: #1f2933;
+  background: #eef2f6;
+  font-family:
+    Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.console-shell {
+  min-height: 100vh;
+}
+
+.toolbar-band {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 28px 18px;
+  background: #ffffff;
+  border-bottom: 1px solid #d7dde5;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #5d6b7a;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+h1 {
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+h2 {
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 280px;
+  color: #425466;
+}
+
+.message-text {
+  max-width: 520px;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 82px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: #334155;
+  background: #e7edf4;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-pill.active {
+  color: #075985;
+  background: #dff3ff;
+}
+
+.status-pill.success {
+  color: #0f766e;
+  background: #dff7ee;
+}
+
+.status-pill.warning {
+  color: #8a4b00;
+  background: #fff0cc;
+}
+
+.status-pill.danger {
+  color: #b42318;
+  background: #ffe4e0;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.04fr) minmax(360px, 0.96fr);
+  gap: 16px;
+  padding: 18px;
+}
+
+.panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #d7dde5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.create-panel {
+  grid-row: span 3;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 34px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.primary-button {
+  border: 1px solid #1468a8;
+  color: #ffffff;
+  background: #1769aa;
+}
+
+.secondary-button {
+  border: 1px solid #c6ced8;
+  color: #243447;
+  background: #f8fafc;
+}
+
+.full-button {
+  width: 100%;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+  color: #4b5968;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.inline-field {
+  margin-bottom: 16px;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid #c8d1dc;
+  border-radius: 6px;
+  color: #1f2933;
+  background: #ffffff;
+}
+
+input {
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
+textarea {
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px;
+  line-height: 1.45;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 3px solid #b9dcff;
+  outline-offset: 1px;
+}
+
+.stage-field {
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+
+.stage-field legend {
+  margin-bottom: 8px;
+  color: #4b5968;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.stage-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.check-option,
+.decision-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  color: #25313f;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.check-option input,
+.decision-row input {
+  width: 15px;
+  min-height: 15px;
+  margin: 0;
+}
+
+.repository-grid {
+  display: grid;
+  grid-template-columns: 1fr 132px 148px;
+  gap: 10px;
+}
+
+.path-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.summary-item {
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.summary-item span {
+  display: block;
+  margin-bottom: 5px;
+  color: #667789;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-item strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.stage-list {
+  display: grid;
+  gap: 8px;
+}
+
+.stage-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 9px 10px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  color: #25313f;
+  background: #ffffff;
+  text-align: left;
+}
+
+.stage-row.selected {
+  border-color: #1769aa;
+  background: #eef7ff;
+}
+
+.stage-name {
+  font-weight: 800;
+}
+
+.stage-meta,
+.subtle-text,
+.empty-text {
+  color: #667789;
+  font-size: 12px;
+}
+
+.artifact-output,
+.checkpoint-output {
+  width: 100%;
+  min-height: 240px;
+  max-height: 460px;
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  color: #1b2733;
+  background: #f8fafc;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.checkpoint-output {
+  min-height: 124px;
+  margin-top: 14px;
+}
+
+.decision-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 1120px) {
+  .workbench,
+  .repository-grid,
+  .path-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .create-panel {
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .toolbar-band {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px 16px 16px;
+  }
+
+  .status-strip {
+    justify-content: flex-start;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .workbench {
+    padding: 12px;
+  }
+
+  .stage-options,
+  .summary-grid,
+  .decision-row,
+  .stage-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -161,6 +161,30 @@ class PipelineServiceTest {
     }
 
     @Test
+    void getPipelineFallsBackToPersistedSnapshotWhenTemporalQueryIsUnavailable() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000030");
+        Pipeline pipeline = new Pipeline("Add auth");
+        pipeline.setId(pipelineId);
+        pipeline.setStatus(PipelineStatus.RUNNING);
+        pipeline.setCurrentStage("REQUIREMENT_ANALYSIS");
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("REQUIREMENT_ANALYSIS")
+        ));
+        pipeline.addStage(PipelineService.createStage("REQUIREMENT_ANALYSIS"));
+
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(temporalPipelineGateway.getStatus(pipelineId)).thenThrow(new RuntimeException("Temporal query unavailable"));
+
+        var response = pipelineService.getPipeline(pipelineId);
+
+        assertThat(response.pipelineId()).isEqualTo(pipelineId);
+        assertThat(response.status()).isEqualTo("RUNNING");
+        assertThat(response.currentStage()).isEqualTo("REQUIREMENT_ANALYSIS");
+        assertThat(response.stages()).hasSize(1);
+        assertThat(response.stages().get(0).status()).isEqualTo("PENDING");
+    }
+
+    @Test
     void submitCheckpointDecisionSignalsTemporalWorkflow() {
         UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000001");
         Pipeline pipeline = new Pipeline("Add auth");

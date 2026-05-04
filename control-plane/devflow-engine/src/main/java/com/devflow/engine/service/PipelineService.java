@@ -21,12 +21,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
 public class PipelineService {
+    private static final Logger log = LoggerFactory.getLogger(PipelineService.class);
+    private static final long WORKFLOW_SNAPSHOT_TIMEOUT_SECONDS = 3;
+
     private static final int DEFAULT_MAX_FILES = 200;
     private static final long DEFAULT_MAX_BYTES = 1_048_576L;
 
@@ -131,8 +139,45 @@ public class PipelineService {
     }
 
     private void synchronizeWorkflowSnapshot(Pipeline pipeline) {
-        temporalPipelineGateway.getStatus(pipeline.getId())
-            .ifPresent(snapshot -> applyWorkflowSnapshot(pipeline, snapshot));
+        /*
+         * 控制台查询状态时应优先展示 Temporal Workflow 的最新快照，但不能把 UI 的可用性完全绑定到
+         * Workflow Query 上。真实开发环境中可能只启动了控制平面和基础设施，还没有启动承载
+         * DevFlowWorkflowImpl 的 Worker；这时 Temporal 会保留已启动的 workflow execution，但查询可能返回
+         * “buffered query cleared” 或超时。这里退回到数据库里已经持久化的 Pipeline/Stage 快照，让前端仍能
+         * 看到流水线已创建、当前阶段、repository 上下文和历史阶段产物。
+         */
+        try {
+            readWorkflowSnapshotWithTimeout(pipeline.getId())
+                .ifPresent(snapshot -> applyWorkflowSnapshot(pipeline, snapshot));
+        } catch (RuntimeException ex) {
+            log.warn(
+                "Temporal workflow snapshot is unavailable for pipeline {}. Returning persisted database snapshot: {}",
+                pipeline.getId(),
+                ex.toString()
+            );
+            log.debug("Temporal workflow snapshot query failed.", ex);
+        }
+    }
+
+    private Optional<WorkflowStatusSnapshot> readWorkflowSnapshotWithTimeout(UUID pipelineId) {
+        /*
+         * Temporal 的 Query 在 workflow execution 已创建但尚无 Worker 承载时，可能会等待服务端 buffered query
+         * 清理后才失败。控制台的状态刷新不应被这个等待拖住，因此这里给“读取最新 Workflow 快照”设置短超时。
+         * 超时并不代表流水线不存在，只代表本次无法拿到内存态快照；数据库快照仍然是有效的展示来源。
+         */
+        return CompletableFuture
+            .supplyAsync(() -> temporalPipelineGateway.getStatus(pipelineId))
+            .orTimeout(WORKFLOW_SNAPSHOT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .exceptionally(ex -> {
+                log.warn(
+                    "Temporal workflow snapshot query timed out or failed for pipeline {}. Returning persisted database snapshot: {}",
+                    pipelineId,
+                    ex.toString()
+                );
+                log.debug("Temporal workflow snapshot query failed.", ex);
+                return Optional.empty();
+            })
+            .join();
     }
 
     private void applyWorkflowSnapshot(Pipeline pipeline, WorkflowStatusSnapshot snapshot) {

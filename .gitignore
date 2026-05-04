@@ -59,6 +59,7 @@ Thumbs.db
 *.tmp
 *.bak
 *.orig
+.devflow-test-env/
 get-docker.sh
 execution-plane/.test_tmp/
 execution-plane/config/llm.local.json

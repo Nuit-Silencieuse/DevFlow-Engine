@@ -10,16 +10,20 @@ import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
-    public static final String TASK_QUEUE = "DEVFLOW_TASK_QUEUE";
-
     private final WorkflowClient workflowClient;
+    private final String taskQueue;
 
-    public TemporalPipelineGatewayImpl(WorkflowClient workflowClient) {
+    public TemporalPipelineGatewayImpl(
+        WorkflowClient workflowClient,
+        @Value("${devflow.task-queue:DEVFLOW_TASK_QUEUE}") String taskQueue
+    ) {
         this.workflowClient = workflowClient;
+        this.taskQueue = taskQueue;
     }
 
     @Override
@@ -27,7 +31,7 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
         DevFlowWorkflow workflow = workflowClient.newWorkflowStub(
             DevFlowWorkflow.class,
             WorkflowOptions.newBuilder()
-                .setTaskQueue(TASK_QUEUE)
+                .setTaskQueue(taskQueue)
                 .setWorkflowId(workflowId(input.pipelineId()))
                 .build()
         );

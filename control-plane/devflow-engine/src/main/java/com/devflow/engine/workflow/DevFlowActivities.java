@@ -5,21 +5,21 @@ import io.temporal.activity.ActivityMethod;
 
 @ActivityInterface
 public interface DevFlowActivities {
-    @ActivityMethod
+    @ActivityMethod(name = "analyzeRequirement")
     StageExecutionResult analyzeRequirement(StageExecutionRequest request);
 
-    @ActivityMethod
+    @ActivityMethod(name = "designSystem")
     StageExecutionResult designSystem(StageExecutionRequest request);
 
-    @ActivityMethod
+    @ActivityMethod(name = "generateCode")
     StageExecutionResult generateCode(StageExecutionRequest request);
 
-    @ActivityMethod
+    @ActivityMethod(name = "generateTests")
     StageExecutionResult generateTests(StageExecutionRequest request);
 
-    @ActivityMethod
+    @ActivityMethod(name = "reviewCode")
     StageExecutionResult reviewCode(StageExecutionRequest request);
 
-    @ActivityMethod
+    @ActivityMethod(name = "integrateDelivery")
     StageExecutionResult integrateDelivery(StageExecutionRequest request);
 }

@@ -63,7 +63,7 @@ description: "基于设计制品生成的开发任务列表"
 
 ### 前端/控制台极简版
 
-- [ ] T029 [P] [US1] 初始化极简前端控制台应用 (`sandbox/frontend/`)，实现触发流水线、展示阶段产物并提交 Reject/Approve 反馈的 UI
+- [x] T029 [P] [US1] 初始化极简前端控制台应用 (`sandbox/frontend/`)，实现触发流水线、展示阶段产物并提交 Reject/Approve 反馈的 UI
 
 ---
 

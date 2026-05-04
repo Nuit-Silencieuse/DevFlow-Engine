@@ -32,12 +32,26 @@ class DevFlowWorkflowContractTest {
     void activityInterfaceCoversAllPlannedPipelineStages() {
         assertThat(DevFlowActivities.class.isAnnotationPresent(ActivityInterface.class)).isTrue();
 
-        var activityNames = Arrays.stream(DevFlowActivities.class.getMethods())
+        var javaMethodNames = Arrays.stream(DevFlowActivities.class.getMethods())
             .filter(method -> method.isAnnotationPresent(ActivityMethod.class))
             .map(Method::getName)
             .toList();
 
-        assertThat(activityNames).containsExactlyInAnyOrder(
+        assertThat(javaMethodNames).containsExactlyInAnyOrder(
+            "analyzeRequirement",
+            "designSystem",
+            "generateCode",
+            "generateTests",
+            "reviewCode",
+            "integrateDelivery"
+        );
+
+        var temporalActivityNames = Arrays.stream(DevFlowActivities.class.getMethods())
+            .filter(method -> method.isAnnotationPresent(ActivityMethod.class))
+            .map(method -> method.getAnnotation(ActivityMethod.class).name())
+            .toList();
+
+        assertThat(temporalActivityNames).containsExactlyInAnyOrder(
             "analyzeRequirement",
             "designSystem",
             "generateCode",

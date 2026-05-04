@@ -116,6 +116,89 @@ npm.cmd start
 
 `http://localhost:8080`
 
+## 前端控制台测试与运行
+
+T029 前端控制台位于 `sandbox/frontend`，用于创建流水线、查询阶段状态、展示阶段产物并提交 `APPROVE`/`REJECT` 人工反馈。详细设计见 [t029-frontend-console.md](./t029-frontend-console.md)。
+
+```powershell
+npm.cmd install
+npm.cmd test
+npm.cmd run build
+```
+
+启动前端:
+
+```powershell
+npm.cmd run dev -- --port 5173
+```
+
+默认 Vite proxy 会将 `/api` 转发到 `http://localhost:8080` 控制平面。如果控制平面地址不同，先设置:
+
+```powershell
+$env:DEVFLOW_CONTROL_PLANE_URL="http://localhost:8081"
+npm.cmd run dev -- --port 5173
+```
+
+本地联调顺序:
+
+1. 确认 WSL Docker 中 Postgres/Temporal 已启动。
+2. 在 `control-plane/devflow-engine` 启动控制平面:
+
+```powershell
+mvn "-Dmaven.repo.local=C:\Users\12252\.m2\repository" spring-boot:run
+```
+
+3. 在 `sandbox/frontend` 启动 Vite:
+
+```powershell
+npm.cmd run dev -- --port 5173
+```
+
+4. 打开 `http://127.0.0.1:5173`，使用页面表单创建流水线、刷新状态并提交 checkpoint。
+
+注意: 如果还未启动承载 `DevFlowWorkflowImpl` 的 Java Workflow Worker，控制平面会在 Temporal Query 超时后返回数据库快照，因此 UI 能看到已创建流水线和阶段列表，但阶段产物要等真实 Workflow/Activity 执行后才会出现。
+
+## 测试环境全流程部署
+
+Temporal UI 在 `http://127.0.0.1:8234` 显示 `No Workers Running` 时，说明没有进程在轮询 `DEVFLOW_TASK_QUEUE`。完整测试环境至少需要:
+
+- Java 控制平面: 提供 REST API，并注册 `DevFlowWorkflowImpl` Workflow Worker。
+- Python 执行平面: 注册 `analyzeRequirement`、`designSystem`、`generateCode` 等 Activity Worker。
+- WSL Docker 基础设施: Postgres、Temporal、Temporal UI。
+- Vite 前端控制台: 通过 `/api` proxy 调用控制平面。
+
+一键启动测试环境:
+
+```powershell
+.\scripts\start-test-env.ps1
+```
+
+默认使用 fake LLM Provider，适合验证 Temporal、前后端、Workflow/Activity 的完整链路。如果要继承 `execution-plane/.env.local` 中的真实 LLM 配置:
+
+```powershell
+.\scripts\start-test-env.ps1 -UseRealLlm
+```
+
+启动后执行冒烟测试:
+
+```powershell
+.\scripts\smoke-test-env.ps1
+```
+
+冒烟测试会通过前端 proxy 创建流水线，等待 `SYSTEM_DESIGN` 人工检查点，自动提交 `APPROVE`，再等待流水线完成。
+
+停止测试环境:
+
+```powershell
+.\scripts\stop-test-env.ps1
+```
+
+如果也要停止 WSL Docker 中的 Postgres/Temporal:
+
+```powershell
+.\scripts\stop-test-env.ps1 -StopDocker
+```
+
 ## 执行平面测试
 
 Python 执行平面位于 `execution-plane`。当前本地虚拟环境为 Python 3.10，可直接运行:
