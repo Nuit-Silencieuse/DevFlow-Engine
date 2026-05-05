@@ -17,7 +17,7 @@ async function testCreatePipelineUsesControlPlaneContract(): Promise<void> {
   assert.deepEqual(response, { pipelineId: "p-001", status: "RUNNING" });
   assert.equal(calls[0].input, "http://control-plane/api/v1/pipelines");
   assert.equal(calls[0].init?.method, "POST");
-  assert.equal((calls[0].init?.headers as Record<string, string>)["content-type"], "application/json");
+  assert.equal((calls[0].init?.headers as Record<string, string>)["content-type"], "application/json; charset=utf-8");
   assert.match(String(calls[0].init?.body), /SYSTEM_DESIGN/);
 }
 
@@ -33,7 +33,7 @@ async function testCreatePipelineSupportsAdvancedRepositoryOptions(): Promise<vo
     requirement: "分析健康检查需求",
     stages: ["REQUIREMENT_ANALYSIS"],
     repository: {
-      rootPath: "D:/projects/demo-app",
+      rootPath: "D:/ZPY/Agent学习/DevFlow-Engine",
       targetFiles: ["src/temporal_worker.py"],
       maxRounds: 3,
       maxFiles: 8,
@@ -44,7 +44,7 @@ async function testCreatePipelineSupportsAdvancedRepositoryOptions(): Promise<vo
   });
 
   assert.deepEqual(JSON.parse(String(calls[0].init?.body)).repository, {
-    rootPath: "D:/projects/demo-app",
+    rootPath: "D:/ZPY/Agent学习/DevFlow-Engine",
     targetFiles: ["src/temporal_worker.py"],
     maxRounds: 3,
     maxFiles: 8,

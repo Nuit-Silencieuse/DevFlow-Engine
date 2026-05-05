@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MAX_FILES = 200
+DEFAULT_MAX_FILES = 500
 DEFAULT_MAX_BYTES = 1_048_576
 DEFAULT_MAX_ROUNDS = 4
 DEFAULT_MAX_SEARCHES = 8
@@ -25,6 +25,7 @@ DEFAULT_EXCLUDE_PATHS = (
     ".pytest_cache",
     ".mypy_cache",
     ".devflow-test-env",
+    ".test_tmp",
     "logs",
     "*.pyc",
     "*.class",
@@ -277,6 +278,38 @@ class RepositoryListing:
 
 
 @dataclass(frozen=True)
+class RepositoryDirectorySummary:
+    """Compact repo map 中的目录级摘要。
+
+    这个结构只记录目录的元数据，不读取源码内容。Agent 先用它判断应该搜索哪些
+    子树，再决定是否进入更细粒度的 search/read_file_range 工具调用。
+    """
+
+    path: str
+    file_count: int = 0
+    child_directory_count: int = 0
+    languages: Mapping[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CompactRepositoryMap:
+    """面向 Agent 规划阶段的轻量仓库地图。
+
+    它不是最终上下文，也不直接进入 PRD prompt 的源码片段区域；它的作用是让 LLM
+    先看到有限的仓库形状、语言分布和高信号路径，然后输出下一步工具调用计划。
+    这样可以避免一开始就把几百甚至几千个候选文件 excerpt 给模型。
+    """
+
+    root_path: str
+    files: tuple[RepositoryFile, ...]
+    directory_summaries: tuple[RepositoryDirectorySummary, ...]
+    language_stats: Mapping[str, int] = field(default_factory=dict)
+    high_signal_files: tuple[str, ...] = ()
+    entrypoint_files: tuple[str, ...] = ()
+    skipped: tuple[SkippedFile, ...] = ()
+
+
+@dataclass(frozen=True)
 class SearchMatch:
     path: str
     line_number: int
@@ -390,6 +423,112 @@ def list_repository(request: RepositoryExplorationRequest) -> RepositoryListing:
 
     return RepositoryListing(
         files=tuple(list(discovered.values())[: request.budget.max_files]),
+        skipped=tuple(sorted(skipped.values(), key=lambda item: item.path)),
+    )
+
+
+def inspect_compact_repository_map(
+    request: RepositoryExplorationRequest,
+    *,
+    max_map_files: int = 800,
+    max_directory_depth: int = 4,
+    max_high_signal_files: int = 120,
+) -> CompactRepositoryMap:
+    """构建一次规划用的 compact repository map。
+
+    这里刻意只读取文件系统元数据：路径、大小、后缀推断出的语言、目录计数和少量
+    高信号文件名。后续 Agent 若认为某个区域相关，必须继续通过 search_text 或
+    read_file_range 读取小片段源码，不能把 map 当作源码上下文。
+    """
+
+    root = request.resolved_root
+    discovered: dict[str, RepositoryFile] = {}
+    skipped: dict[str, SkippedFile] = {}
+    directory_stats: dict[str, dict[str, Any]] = {}
+
+    for exclude_path in request.exclude_paths:
+        skipped.setdefault(
+            exclude_path,
+            SkippedFile(
+                path=exclude_path,
+                reason="EXCLUDED",
+                detail="user exclude rule is active for this exploration",
+            ),
+        )
+
+    for target_file in request.target_files:
+        resolved = _resolve_inside_root(root, target_file)
+        relative_path = _relative_path(root, resolved)
+        if _is_excluded(relative_path, request.exclude_paths):
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="EXCLUDED",
+                detail="target file is excluded by repository exploration rules",
+            )
+        elif resolved.is_file() and not _has_binary_suffix(resolved):
+            file = _repository_file(root, resolved, "target")
+            discovered[relative_path] = file
+            _record_directory_file(directory_stats, relative_path, file.language, max_directory_depth)
+
+    for include_path in request.effective_include_paths:
+        resolved = _resolve_inside_root(root, include_path)
+        _collect_compact_repository_map(
+            root,
+            resolved,
+            request,
+            discovered,
+            skipped,
+            directory_stats,
+            max_map_files=max_map_files,
+            max_directory_depth=max_directory_depth,
+        )
+        if len(discovered) >= max_map_files:
+            skipped.setdefault(
+                _normalize_path(include_path),
+                SkippedFile(
+                    path=_normalize_path(include_path),
+                    reason="BUDGET_EXHAUSTED",
+                    detail="compact repository map reached max_map_files",
+                ),
+            )
+            break
+
+    files = tuple(
+        sorted(
+            discovered.values(),
+            key=lambda file: (
+                0 if file.priority_hint == "target" else 1,
+                0 if _is_high_signal_path(file.path, file.priority_hint) else 1,
+                file.path.casefold(),
+            ),
+        )
+    )
+    language_stats: dict[str, int] = {}
+    for file in files:
+        language_stats[file.language] = language_stats.get(file.language, 0) + 1
+
+    directory_summaries = tuple(
+        RepositoryDirectorySummary(
+            path=path,
+            file_count=int(stats.get("file_count", 0)),
+            child_directory_count=len(stats.get("child_directories", set())),
+            languages=dict(sorted(dict(stats.get("languages", {})).items())),
+        )
+        for path, stats in sorted(directory_stats.items(), key=lambda item: item[0].casefold())
+    )
+    high_signal_files = tuple(
+        file.path
+        for file in files
+        if _is_high_signal_path(file.path, file.priority_hint)
+    )[:max_high_signal_files]
+    entrypoint_files = tuple(file.path for file in files if _is_entrypoint_path(file.path))[:80]
+    return CompactRepositoryMap(
+        root_path=str(root),
+        files=files,
+        directory_summaries=directory_summaries,
+        language_stats=dict(sorted(language_stats.items())),
+        high_signal_files=high_signal_files,
+        entrypoint_files=entrypoint_files,
         skipped=tuple(sorted(skipped.values(), key=lambda item: item.path)),
     )
 
@@ -659,8 +798,129 @@ def _collect_repository_files(
     if not current.is_dir():
         return
 
-    for child in sorted(current.iterdir(), key=lambda item: item.name.casefold()):
+    try:
+        children = sorted(current.iterdir(), key=lambda item: item.name.casefold())
+    except OSError as exc:
+        skipped[relative_path] = SkippedFile(
+            path=relative_path,
+            reason="READ_ERROR",
+            detail=f"cannot list directory during repository listing: {exc}",
+        )
+        return
+
+    for child in children:
         _collect_repository_files(root, child, request, discovered, skipped)
+
+
+def _collect_compact_repository_map(
+    root: Path,
+    current: Path,
+    request: RepositoryExplorationRequest,
+    discovered: dict[str, RepositoryFile],
+    skipped: dict[str, SkippedFile],
+    directory_stats: dict[str, dict[str, Any]],
+    *,
+    max_map_files: int,
+    max_directory_depth: int,
+) -> None:
+    if not current.exists():
+        return
+
+    relative_path = _relative_path(root, current)
+    if _is_excluded(relative_path, request.exclude_paths):
+        skipped[relative_path] = SkippedFile(
+            path=relative_path,
+            reason="EXCLUDED",
+            detail="default or user exclude rule matched",
+        )
+        return
+
+    if len(discovered) >= max_map_files:
+        skipped.setdefault(
+            relative_path,
+            SkippedFile(
+                path=relative_path,
+                reason="BUDGET_EXHAUSTED",
+                detail="compact repository map reached max_map_files",
+            ),
+        )
+        return
+
+    if current.is_file():
+        if _has_binary_suffix(current):
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="BINARY",
+                detail="binary-like suffix skipped during compact repository map",
+            )
+            return
+        file = _repository_file(root, current)
+        discovered.setdefault(relative_path, file)
+        _record_directory_file(directory_stats, relative_path, file.language, max_directory_depth)
+        return
+
+    if not current.is_dir():
+        return
+
+    if _path_depth(relative_path) <= max_directory_depth:
+        stats = directory_stats.setdefault(
+            relative_path,
+            {"file_count": 0, "child_directories": set(), "languages": {}},
+        )
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold())
+        except OSError as exc:
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="READ_ERROR",
+                detail=f"cannot list directory during compact repository map: {exc}",
+            )
+            return
+        for child in children:
+            if child.is_dir():
+                stats["child_directories"].add(child.name)
+    else:
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold())
+        except OSError as exc:
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="READ_ERROR",
+                detail=f"cannot list directory during compact repository map: {exc}",
+            )
+            return
+
+    for child in children:
+        _collect_compact_repository_map(
+            root,
+            child,
+            request,
+            discovered,
+            skipped,
+            directory_stats,
+            max_map_files=max_map_files,
+            max_directory_depth=max_directory_depth,
+        )
+
+
+def _record_directory_file(
+    directory_stats: dict[str, dict[str, Any]],
+    relative_file_path: str,
+    language: str,
+    max_directory_depth: int,
+) -> None:
+    parent = Path(relative_file_path).parent.as_posix()
+    if parent == ".":
+        parent = "."
+    if _path_depth(parent) > max_directory_depth:
+        return
+    stats = directory_stats.setdefault(
+        parent,
+        {"file_count": 0, "child_directories": set(), "languages": {}},
+    )
+    stats["file_count"] = int(stats.get("file_count", 0)) + 1
+    languages = stats.setdefault("languages", {})
+    languages[language] = int(languages.get(language, 0)) + 1
 
 
 def _is_excluded(relative_path: str, exclude_paths: Iterable[str]) -> bool:
@@ -750,6 +1010,87 @@ def _priority_hint_for(path: Path) -> str:
     if path.suffix.casefold() in (".md", ".yml", ".yaml", ".json"):
         return "metadata"
     return "source"
+
+
+def _is_high_signal_path(path: str, priority_hint: str = "") -> bool:
+    normalized = path.casefold()
+    if priority_hint == "target":
+        return True
+    high_signal_tokens = (
+        "agent",
+        "workflow",
+        "worker",
+        "activity",
+        "service",
+        "controller",
+        "repository",
+        "client",
+        "provider",
+        "router",
+        "handler",
+        "config",
+        "schema",
+        "model",
+        "test",
+        "spec",
+    )
+    important_names = (
+        "readme.md",
+        "pom.xml",
+        "build.gradle",
+        "settings.gradle",
+        "package.json",
+        "pyproject.toml",
+        "requirements.txt",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+    )
+    return any(token in normalized for token in high_signal_tokens) or Path(normalized).name in important_names
+
+
+def _is_entrypoint_path(path: str) -> bool:
+    normalized = path.casefold()
+    name = Path(normalized).name
+    return name in {
+        "main.py",
+        "app.py",
+        "application.java",
+        "main.java",
+        "index.ts",
+        "main.ts",
+        "server.ts",
+        "package.json",
+        "pom.xml",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+    } or normalized.endswith("/application.java")
+
+
+def _has_binary_suffix(path: Path) -> bool:
+    return path.suffix.casefold() in {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tar",
+        ".jar",
+        ".class",
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+    }
+
+
+def _path_depth(relative_path: str) -> int:
+    normalized = _normalize_path(relative_path)
+    if normalized == ".":
+        return 0
+    return normalized.count("/") + 1
 
 
 def _score_match(path: str, line: str, normalized_query: str) -> float:

@@ -65,7 +65,7 @@ app.innerHTML = `
 
         <label class="field">
           <span>新需求</span>
-          <textarea name="requirement" required>以当前 DevFlow-Engine 项目为材料，分析前端控制台如何触发流水线、展示阶段产物并提交人工反馈。</textarea>
+          <textarea name="requirement" required>以当前 DevFlow-Engine项目的 tasks.md 为材料，完成T023。</textarea>
         </label>
 
         <fieldset class="field stage-field">
@@ -80,7 +80,7 @@ app.innerHTML = `
           </label>
           <label class="field">
             <span>最大文件数</span>
-            <input name="maxFiles" value="80" inputmode="numeric" />
+            <input name="maxFiles" value="800" inputmode="numeric" />
           </label>
           <label class="field">
             <span>最大字节数</span>

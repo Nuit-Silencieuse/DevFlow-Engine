@@ -9,7 +9,47 @@ REPO_ROOT = EXECUTION_PLANE_ROOT.parent
 sys.path.insert(0, str(EXECUTION_PLANE_ROOT))
 
 from src.agents.requirement_agent import RequirementAgent  # noqa: E402
-from src.llm import FakeProvider, LlmClient, LlmClientConfig, LlmTraceRecorder  # noqa: E402
+from src.llm import LlmClient, LlmClientConfig, LlmResponse, LlmTraceRecorder  # noqa: E402
+
+
+class ProgressiveSmokeProvider:
+    name = "fake"
+
+    def __init__(self, prd_response: dict):
+        self.prd_response = prd_response
+
+    def complete(self, request, config):
+        if request.task == "progressive_context_exploration_plan":
+            payload = {
+                "queries": [
+                    "RequirementAgent",
+                    "repository context",
+                    "PipelineController",
+                    "frontend health",
+                ],
+                "pathHints": [
+                    "execution-plane/src/agents/requirement_agent.py",
+                    "execution-plane/src/context/repository_context.py",
+                    "control-plane/devflow-engine/src/main/java/com/devflow/engine/api/PipelineController.java",
+                    "sandbox/frontend/src/main.ts",
+                ],
+                "readRanges": [
+                    {"path": "execution-plane/src/agents/requirement_agent.py", "lineStart": 1, "lineEnd": 120},
+                    {"path": "execution-plane/src/context/repository_context.py", "lineStart": 1, "lineEnd": 140},
+                ],
+                "strategy": "smoke_test_progressive_tool_plan",
+            }
+        else:
+            payload = self.prd_response
+        return LlmResponse(
+            provider=self.name,
+            model=request.model or config.default_model or "fake-smoke-model",
+            text=json.dumps(payload, ensure_ascii=False),
+            parsed_json=None,
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            latency_ms=0,
+            request_id=None,
+        )
 
 
 def main() -> int:
@@ -72,7 +112,7 @@ def main() -> int:
     }
     llm_client = LlmClient(
         config=LlmClientConfig(default_provider="fake", default_model="fake-smoke-model"),
-        providers={"fake": FakeProvider(json.dumps(fake_response, ensure_ascii=False))},
+        providers={"fake": ProgressiveSmokeProvider(fake_response)},
         trace_recorder=LlmTraceRecorder(
             enabled=True,
             stdout=False,

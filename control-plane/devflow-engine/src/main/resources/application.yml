@@ -20,3 +20,10 @@ spring:
 
 temporal:
   target: localhost:7233
+
+server:
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true

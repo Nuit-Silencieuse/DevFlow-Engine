@@ -21,6 +21,7 @@ from src.context import (
     RepositoryContext,
     SkippedFile,
     build_context_pack,
+    inspect_compact_repository_map,
     list_repository,
     list_files,
     read_file,
@@ -54,6 +55,7 @@ class RepositoryContextToolsTest(unittest.TestCase):
             self.assertEqual(request.effective_include_paths, (".",))
             self.assertIn("node_modules", DEFAULT_EXCLUDE_PATHS)
             self.assertIn("logs", DEFAULT_EXCLUDE_PATHS)
+            self.assertIn(".test_tmp", DEFAULT_EXCLUDE_PATHS)
             self.assertGreaterEqual(request.budget.max_rounds, DEFAULT_MAX_ROUNDS)
             self.assertEqual(request.budget.max_files, DEFAULT_MAX_FILES)
             self.assertEqual(request.budget.max_bytes, DEFAULT_MAX_BYTES)
@@ -144,6 +146,28 @@ class RepositoryContextToolsTest(unittest.TestCase):
         self.assertTrue(
             any(file.language == "python" and file.priority_hint for file in listing.files)
         )
+
+    def test_compact_repository_map_exposes_nested_shape_without_source_excerpts(self):
+        with self.temporary_repository() as repo_dir:
+            root = Path(repo_dir)
+            (root / "services" / "billing" / "src").mkdir(parents=True)
+            (root / "services" / "billing" / "src" / "BillingService.java").write_text(
+                "class BillingService { String secret = \"must not appear in map\"; }\n",
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+            request = RepositoryExplorationRequest.from_mapping({"rootPath": repo_dir})
+            repo_map = inspect_compact_repository_map(request, max_directory_depth=4)
+
+        mapped_paths = {file.path for file in repo_map.files}
+        directory_paths = {summary.path for summary in repo_map.directory_summaries}
+        serialized = str(repo_map)
+        self.assertIn("services/billing/src/BillingService.java", mapped_paths)
+        self.assertIn("services/billing/src", directory_paths)
+        self.assertIn("java", repo_map.language_stats)
+        self.assertIn("services/billing/src/BillingService.java", repo_map.high_signal_files)
+        self.assertNotIn("must not appear in map", serialized)
 
     def test_search_text_returns_structured_matches_for_progressive_request(self):
         request = RepositoryExplorationRequest.from_mapping(

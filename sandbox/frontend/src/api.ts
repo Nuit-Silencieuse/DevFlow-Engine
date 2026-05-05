@@ -61,7 +61,7 @@ export class PipelineApiClient {
       ...init,
       headers: {
         accept: "application/json",
-        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...(init.body ? { "content-type": "application/json; charset=utf-8" } : {}),
         ...init.headers,
       },
     });

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from shutil import rmtree
 from unittest.mock import patch
 
-from src.llm import FakeProvider, LlmClient, LlmClientConfig, LlmTraceRecorder
+from src.llm import FakeProvider, LlmClient, LlmClientConfig, LlmResponse, LlmTraceRecorder
 from src.llm.config import (
     EXECUTION_PLANE_ROOT,
     load_env_file,
@@ -23,8 +23,40 @@ from src.workers.activities import analyze_requirement
 def fake_llm_client(response: dict) -> LlmClient:
     return LlmClient(
         config=LlmClientConfig(default_provider="fake", max_retries=0),
-        providers={"fake": FakeProvider(response_text=json.dumps(response, ensure_ascii=False))},
+        providers={"fake": ProgressivePlanFakeProvider(response)},
     )
+
+
+class ProgressivePlanFakeProvider:
+    name = "fake"
+
+    def __init__(self, prd_response: dict):
+        self.prd_response = prd_response
+        self.calls: list[str] = []
+
+    def complete(self, request, config):
+        self.calls.append(request.task)
+        if request.task == "progressive_context_exploration_plan":
+            response = {
+                "queries": ["health", "Temporal worker"],
+                "pathHints": ["src/health_service.py", "src/temporal_worker.py"],
+                "readRanges": [
+                    {"path": "src/health_service.py", "lineStart": 1, "lineEnd": 80},
+                    {"path": "src/temporal_worker.py", "lineStart": 1, "lineEnd": 80},
+                ],
+                "strategy": "test_llm_planned_progressive_exploration",
+            }
+        else:
+            response = self.prd_response
+        return LlmResponse(
+            provider=self.name,
+            model=request.model or config.default_model or "fake-model",
+            text=json.dumps(response, ensure_ascii=False),
+            parsed_json=None,
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            latency_ms=0,
+            request_id=None,
+        )
 
 
 class RequirementAgentTest(unittest.TestCase):
@@ -212,6 +244,9 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertNotIn("node_modules/ignored.js", code_context["inspected_files"])
         self.assertNotIn("logs/runtime.log", code_context["inspected_files"])
         self.assertTrue(code_context["search_queries"])
+        self.assertIn("Temporal", code_context["search_queries"])
+        self.assertIn("worker", code_context["search_queries"])
+        self.assertTrue(all(" " not in query for query in code_context["search_queries"]))
         self.assertTrue(code_context["evidence"])
         self.assertGreater(code_context["budget_usage"]["files_read"], 0)
         self.assertIn("codeContext", result)
@@ -344,6 +379,165 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertIn("EVALUATE", action_types)
         self.assertEqual(result["code_context"]["exploration_trace"], result["exploration_trace"])
         self.assertEqual(result["codeContext"]["explorationTrace"], result["exploration_trace"])
+
+    def test_progressive_exploration_reads_ranked_ranges_not_all_candidates(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        with self.temporary_repository() as repo_dir:
+            root = Path(repo_dir)
+            (root / "src").mkdir()
+            (root / "src" / "health_service.py").write_text(
+                "class HealthService:\n    def check(self):\n        return 'healthy'\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "temporal_worker.py").write_text(
+                "class TemporalWorker:\n    TASK_QUEUE = 'DEVFLOW_TASK_QUEUE'\n",
+                encoding="utf-8",
+            )
+            for index in range(30):
+                (root / "src" / f"irrelevant_{index}.py").write_text(
+                    f"VALUE_{index} = 'no matching signal'\n",
+                    encoding="utf-8",
+                )
+
+            result = RequirementAgent(
+                llm_client=fake_llm_client(
+                    {
+                        "summary": "health page",
+                        "user_stories": [
+                            {"role": "tester", "goal": "see health", "benefit": "verify worker"}
+                        ],
+                        "acceptance_criteria": [
+                            {"id": "AC-1", "description": "show health", "verification": "inspect context"},
+                            {"id": "AC-2", "description": "show worker", "verification": "inspect context"},
+                        ],
+                    }
+                )
+            ).run(
+                {
+                    "original_requirement": "请分析测试环境健康检查页面需求",
+                    "repository_context": {"rootPath": repo_dir, "maxFiles": 12, "maxBytes": 8000},
+                }
+            )
+
+        code_context = result["code_context"]
+        action_types = [step["actionType"] for step in result["exploration_trace"]]
+        self.assertIn("OBSERVE_TOOLS", action_types)
+        self.assertIn("src/health_service.py", code_context["inspected_files"])
+        self.assertIn("src/temporal_worker.py", code_context["inspected_files"])
+        self.assertLessEqual(len(code_context["inspected_files"]), 3)
+        self.assertGreater(len(code_context["candidate_files"]), len(code_context["inspected_files"]))
+        self.assertIn("repository_map", code_context)
+
+    def test_phrase_queries_are_split_and_low_hit_context_does_not_report_high_confidence(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        with self.temporary_repository() as repo_dir:
+            root = Path(repo_dir)
+            (root / "docs").mkdir()
+            (root / "docs" / "design.md").write_text(
+                "# Design\nThis document mentions agent and design separately.\n",
+                encoding="utf-8",
+            )
+            (root / "src").mkdir()
+            (root / "src" / "design_agent.py").write_text(
+                "class DesignAgent:\n    pass\n",
+                encoding="utf-8",
+            )
+
+            result = RequirementAgent(
+                llm_client=fake_llm_client(
+                    {
+                        "summary": "design agent",
+                        "user_stories": [
+                            {"role": "developer", "goal": "generate design", "benefit": "continue pipeline"}
+                        ],
+                        "acceptance_criteria": [
+                            {"id": "AC-1", "description": "design output", "verification": "inspect result"},
+                            {"id": "AC-2", "description": "trace output", "verification": "inspect trace"},
+                        ],
+                    }
+                )
+            ).run(
+                {
+                    "original_requirement": "完成方案设计 agent",
+                    "repository_context": {
+                        "rootPath": repo_dir,
+                        "maxFiles": 20,
+                        "maxBytes": 12000,
+                    },
+                }
+            )
+
+        code_context = result["code_context"]
+        self.assertNotIn("Temporal worker", code_context["search_queries"])
+        self.assertTrue(all(" " not in query for query in code_context["search_queries"]))
+        self.assertLess(code_context["confidence"], 0.9)
+
+    def test_invalid_user_story_shape_is_rejected_by_prd_validation(self):
+        from src.agents.requirement_agent import normalize_prd, validate_prd_shape
+
+        prd = normalize_prd(
+            {
+                "summary": "实现方案设计 Agent",
+                "user_stories": [
+                    {"role": "系统", "goal": "", "benefit": ""},
+                    {"role": "开发者", "goal": "", "benefit": ""},
+                ],
+                "acceptance_criteria": [
+                    {"id": "AC-1", "description": "生成设计文档", "verification": "检查 design_doc"},
+                    {"id": "AC-2", "description": "记录证据", "verification": "检查 evidence"},
+                ],
+            },
+            "实现方案设计 Agent",
+            {"inspected_files": ["specs/tasks.md"], "search_queries": ["T023"]},
+            "",
+        )
+
+        issues = validate_prd_shape(prd)
+        self.assertEqual(prd["user_stories"], [])
+        self.assertIn("at least one complete user_story is required", issues)
+
+    def test_repair_prd_fills_structural_user_story_gap(self):
+        from src.agents.requirement_agent import (
+            normalize_prd,
+            repair_structural_prd_gaps,
+            validate_prd_shape,
+        )
+
+        prd = normalize_prd(
+            {
+                "summary": "Analyze frontend pipeline artifact display.",
+                "user_stories": [
+                    {"role": "Operator", "goal": "", "benefit": ""},
+                ],
+                "acceptance_criteria": [
+                    {
+                        "id": "AC-001",
+                        "description": "Pipeline output includes structured PRD.",
+                        "verification": "Inspect REQUIREMENT_ANALYSIS output.",
+                    },
+                    {
+                        "id": "AC-002",
+                        "description": "Pipeline output includes code context.",
+                        "verification": "Inspect codeContext in stage output.",
+                    },
+                ],
+            },
+            "Analyze frontend pipeline artifact display.",
+            {"inspected_files": ["sandbox/frontend/src/main.ts"], "search_queries": ["pipeline"]},
+            "",
+        )
+
+        repaired = repair_structural_prd_gaps(
+            prd,
+            "Analyze frontend pipeline artifact display.",
+        )
+
+        self.assertEqual(validate_prd_shape(repaired), [])
+        self.assertEqual(repaired["user_stories"][0]["role"], "目标用户")
+        self.assertEqual(repaired["quality"]["confidence"], "LOW")
+        self.assertTrue(repaired["open_questions"])
 
     def test_low_signal_repository_outputs_open_questions_and_low_confidence(self):
         from src.agents.requirement_agent import RequirementAgent
