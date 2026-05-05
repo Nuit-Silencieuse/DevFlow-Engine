@@ -145,7 +145,11 @@ class PipelineServiceTest {
                 new StageExecutionResult(
                     "REQUIREMENT_ANALYSIS",
                     "COMPLETED",
-                    Map.of("structured_prd", Map.of("summary", "登录注册"))
+                    Map.of(
+                        "structured_prd", Map.of("summary", "登录注册"),
+                        "codeContext", Map.of("status", "COMPLETE"),
+                        "explorationTrace", List.of(Map.of("actionType", "PLAN"))
+                    )
                 ),
                 new StageExecutionResult(
                     "SYSTEM_DESIGN",
@@ -162,6 +166,8 @@ class PipelineServiceTest {
         assertThat(response.stages()).hasSize(2);
         assertThat(response.stages().get(0).status()).isEqualTo("COMPLETED");
         assertThat(response.stages().get(0).output()).containsKey("structured_prd");
+        assertThat(response.stages().get(0).output()).containsKey("codeContext");
+        assertThat(response.stages().get(0).output()).containsKey("explorationTrace");
         assertThat(response.stages().get(1).output()).containsKey("design_doc");
         verify(pipelineRepository).save(pipeline);
     }

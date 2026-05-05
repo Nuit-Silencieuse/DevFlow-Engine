@@ -115,7 +115,13 @@ def _merge_known_state(state: DevFlowState, payload: dict[str, Any]) -> None:
 
 def _output_payload_for_stage(stage_name: str, state: DevFlowState) -> dict[str, Any]:
     output_keys = {
-        REQUIREMENT_ANALYSIS: ("structured_prd", "code_context", "codeContext"),
+        REQUIREMENT_ANALYSIS: (
+            "structured_prd",
+            "code_context",
+            "codeContext",
+            "exploration_trace",
+            "explorationTrace",
+        ),
         SYSTEM_DESIGN: ("structured_prd", "design_doc", "human_feedback"),
         CODE_GENERATION: ("design_doc", "diff_patch"),
         TEST_GENERATION: ("diff_patch", "test_results"),

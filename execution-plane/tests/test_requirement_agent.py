@@ -4,7 +4,10 @@ import asyncio
 import json
 import os
 import unittest
+import uuid
 from pathlib import Path
+from contextlib import contextmanager
+from shutil import rmtree
 from unittest.mock import patch
 
 from src.llm import FakeProvider, LlmClient, LlmClientConfig, LlmTraceRecorder
@@ -25,6 +28,17 @@ def fake_llm_client(response: dict) -> LlmClient:
 
 
 class RequirementAgentTest(unittest.TestCase):
+    @contextmanager
+    def temporary_repository(self):
+        scratch_dir = Path(__file__).resolve().parents[1] / ".test_tmp"
+        scratch_dir.mkdir(exist_ok=True)
+        repo_dir = scratch_dir / f"repo-{uuid.uuid4().hex}"
+        repo_dir.mkdir()
+        try:
+            yield str(repo_dir)
+        finally:
+            rmtree(repo_dir, ignore_errors=True)
+
     def test_generates_structured_prd_with_fake_llm(self):
         from src.agents.requirement_agent import RequirementAgent
 
@@ -290,6 +304,88 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertTrue(any(item["path"] == "src/temporal_worker.py" for item in code_context["skipped_paths"]))
         self.assertNotIn("class HealthService", evidence_text)
 
+    def test_exploration_trace_records_progressive_tool_steps(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        fixture_root = Path(__file__).resolve().parent / "fixtures" / "progressive_repo"
+        result = RequirementAgent(
+            llm_client=fake_llm_client(
+                {
+                    "summary": "分析健康检查需求",
+                    "user_stories": [
+                        {"role": "测试人员", "goal": "查看健康状态", "benefit": "定位环境问题"}
+                    ],
+                    "acceptance_criteria": [
+                        {
+                            "id": "AC-001",
+                            "description": "输出探索轨迹",
+                            "verification": "检查 exploration_trace",
+                        },
+                        {
+                            "id": "AC-002",
+                            "description": "输出代码证据",
+                            "verification": "检查 code_context.evidence",
+                        },
+                    ],
+                }
+            )
+        ).run(
+            {
+                "original_requirement": "Health check should show Temporal worker status.",
+                "repository_context": {"rootPath": str(fixture_root)},
+            }
+        )
+
+        action_types = [step["actionType"] for step in result["exploration_trace"]]
+        self.assertIn("PLAN", action_types)
+        self.assertIn("LIST_FILES", action_types)
+        self.assertIn("SEARCH_TEXT", action_types)
+        self.assertIn("READ_FILE", action_types)
+        self.assertIn("EVALUATE", action_types)
+        self.assertEqual(result["code_context"]["exploration_trace"], result["exploration_trace"])
+        self.assertEqual(result["codeContext"]["explorationTrace"], result["exploration_trace"])
+
+    def test_low_signal_repository_outputs_open_questions_and_low_confidence(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        with self.temporary_repository() as repo_dir:
+            Path(repo_dir, "README.md").write_text(
+                "# Empty fixture\nNo implementation signals here.\n",
+                encoding="utf-8",
+            )
+            result = RequirementAgent(
+                llm_client=fake_llm_client(
+                    {
+                        "summary": "分析未知需求",
+                        "user_stories": [
+                            {"role": "用户", "goal": "完成未知能力", "benefit": "待确认"}
+                        ],
+                        "acceptance_criteria": [
+                            {
+                                "id": "AC-001",
+                                "description": "输出开放问题",
+                                "verification": "检查 open_questions",
+                            },
+                            {
+                                "id": "AC-002",
+                                "description": "降低置信度",
+                                "verification": "检查 code_context.confidence",
+                            },
+                        ],
+                    }
+                )
+            ).run(
+                {
+                    "original_requirement": "Implement quantum billing reconciliation webhook.",
+                    "repository_context": {"rootPath": repo_dir, "maxFiles": 1},
+                }
+            )
+
+        self.assertEqual(result["code_context"]["status"], "DEGRADED")
+        self.assertLess(result["code_context"]["confidence"], 0.5)
+        self.assertTrue(result["code_context"]["open_questions"])
+        self.assertTrue(result["structured_prd"]["open_questions"])
+
     def test_trace_file_contains_requirement_agent_intermediate_artifacts(self):
         from src.agents.requirement_agent import RequirementAgent
 
@@ -360,6 +456,8 @@ class RequirementAgentTest(unittest.TestCase):
                     },
                     "code_context": {"inspected_files": ["README.md"]},
                     "codeContext": {"inspectedFiles": ["README.md"]},
+                    "exploration_trace": [{"actionType": "PLAN"}],
+                    "explorationTrace": [{"actionType": "PLAN"}],
                     "current_step": "REQUIREMENT_ANALYSIS",
                     "error_logs": [],
                 }
@@ -380,6 +478,8 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertEqual(result["outputPayload"]["structured_prd"]["source"], "requirement_agent")
         self.assertEqual(result["outputPayload"]["code_context"]["inspected_files"], ["README.md"])
         self.assertEqual(result["outputPayload"]["codeContext"]["inspectedFiles"], ["README.md"])
+        self.assertEqual(result["outputPayload"]["exploration_trace"][0]["actionType"], "PLAN")
+        self.assertEqual(result["outputPayload"]["explorationTrace"][0]["actionType"], "PLAN")
 
 
 class RequirementAgentEffectTest(unittest.TestCase):

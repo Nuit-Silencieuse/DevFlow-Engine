@@ -1,7 +1,12 @@
 import type {
+  BudgetUsage,
+  CodeContextSummary,
   CreatePipelineRequest,
+  EvidenceItem,
+  ExplorationStep,
   PipelineStatusResponse,
   RepositoryContext,
+  SkippedPath,
   StageStatusResponse,
 } from "./types";
 
@@ -120,4 +125,43 @@ export function statusTone(status: string): "neutral" | "active" | "success" | "
     default:
       return "neutral";
   }
+}
+
+export interface CodeContextViewModel {
+  status: string;
+  inspectedFiles: string[];
+  searchQueries: string[];
+  evidence: EvidenceItem[];
+  skippedPaths: SkippedPath[];
+  budgetUsage: Required<BudgetUsage>;
+  confidence: number;
+  openQuestions: string[];
+  trace: ExplorationStep[];
+}
+
+export function buildCodeContextViewModel(output: StageStatusResponse["output"] | null): CodeContextViewModel | null {
+  const codeContext = output?.codeContext;
+  if (!codeContext) {
+    return null;
+  }
+  return {
+    status: codeContext.status ?? "UNKNOWN",
+    inspectedFiles: codeContext.inspectedFiles ?? [],
+    searchQueries: codeContext.searchQueries ?? [],
+    evidence: codeContext.evidence ?? [],
+    skippedPaths: codeContext.skippedPaths ?? [],
+    budgetUsage: normalizeBudgetUsage(codeContext.budgetUsage),
+    confidence: typeof codeContext.confidence === "number" ? codeContext.confidence : 0,
+    openQuestions: codeContext.openQuestions ?? [],
+    trace: output.explorationTrace ?? codeContext.explorationTrace ?? [],
+  };
+}
+
+export function normalizeBudgetUsage(value: CodeContextSummary["budgetUsage"]): Required<BudgetUsage> {
+  return {
+    roundsUsed: value?.roundsUsed ?? 0,
+    filesRead: value?.filesRead ?? 0,
+    bytesRead: value?.bytesRead ?? 0,
+    searchesUsed: value?.searchesUsed ?? 0,
+  };
 }

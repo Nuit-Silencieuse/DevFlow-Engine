@@ -32,11 +32,64 @@ export interface CreatePipelineResponse {
   status: string;
 }
 
+export interface EvidenceItem {
+  filePath: string;
+  lineStart?: number | null;
+  lineEnd?: number | null;
+  symbolName?: string | null;
+  excerpt?: string;
+  relevanceReason?: string;
+  supports?: string[];
+}
+
+export interface SkippedPath {
+  path: string;
+  reason: string;
+  detail?: string;
+}
+
+export interface BudgetUsage {
+  roundsUsed?: number;
+  filesRead?: number;
+  bytesRead?: number;
+  searchesUsed?: number;
+}
+
+export interface ExplorationStep {
+  stepIndex?: number;
+  roundIndex?: number;
+  actionType: string;
+  reason?: string;
+  resultSummary?: string;
+  selectedFiles?: string[];
+}
+
+export interface CodeContextSummary {
+  status?: string;
+  rootPath?: string;
+  inspectedFiles?: string[];
+  searchQueries?: string[];
+  candidateFiles?: string[];
+  evidence?: EvidenceItem[];
+  skippedPaths?: SkippedPath[];
+  budgetUsage?: BudgetUsage;
+  confidence?: number;
+  openQuestions?: string[];
+  notes?: string[];
+  explorationTrace?: ExplorationStep[];
+}
+
+export interface StageOutput {
+  codeContext?: CodeContextSummary;
+  explorationTrace?: ExplorationStep[];
+  [key: string]: unknown;
+}
+
 export interface StageStatusResponse {
   name: string;
   status: string;
   requiresHumanApproval: boolean;
-  output: Record<string, unknown>;
+  output: StageOutput;
 }
 
 export interface PipelineStatusResponse {

@@ -349,6 +349,92 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.code-context-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.code-context-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+  color: #425466;
+  font-size: 13px;
+}
+
+.code-context-header strong {
+  color: #1f2933;
+  font-size: 14px;
+}
+
+.code-context-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.code-context-stats span,
+.context-list-item,
+.trace-row,
+.evidence-card {
+  min-width: 0;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+
+.code-context-stats span {
+  padding: 8px;
+  color: #4b5968;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mini-heading {
+  margin: 0 0 7px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.code-context-list,
+.evidence-list,
+.trace-list {
+  min-width: 0;
+}
+
+.context-list-item,
+.trace-row {
+  margin: 0 0 6px;
+  padding: 8px;
+  color: #25313f;
+  font-size: 12px;
+}
+
+.evidence-card {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 10px;
+}
+
+.evidence-card strong {
+  color: #1f2933;
+  font-size: 13px;
+}
+
+.evidence-card span,
+.evidence-card p {
+  margin: 0;
+  color: #4b5968;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .checkpoint-output {
   min-height: 124px;
   margin-top: 14px;
@@ -392,6 +478,7 @@ button:focus-visible {
 
   .stage-options,
   .summary-grid,
+  .code-context-stats,
   .decision-row,
   .stage-row {
     grid-template-columns: 1fr;

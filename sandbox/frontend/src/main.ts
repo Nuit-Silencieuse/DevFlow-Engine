@@ -2,6 +2,7 @@ import { PipelineApiClient, PipelineApiError } from "./api";
 import "./styles.css";
 import type { CheckpointDecision, PipelineStatusResponse, StageStatusResponse } from "./types";
 import {
+  buildCodeContextViewModel,
   buildCreatePipelineRequest,
   DEFAULT_STAGE_NAMES,
   formatJson,
@@ -129,6 +130,7 @@ sandbox/frontend/src/main.ts</textarea>
           <h2>阶段产物</h2>
           <span id="artifactStage" class="subtle-text">未选择阶段</span>
         </div>
+        <div id="codeContextPanel" class="code-context-panel"></div>
         <pre id="artifactOutput" class="artifact-output">{}</pre>
       </section>
 
@@ -161,6 +163,7 @@ const globalMessage = mustGet<HTMLSpanElement>("globalMessage");
 const pipelineSummary = mustGet<HTMLDivElement>("pipelineSummary");
 const stageList = mustGet<HTMLDivElement>("stageList");
 const artifactStage = mustGet<HTMLSpanElement>("artifactStage");
+const codeContextPanel = mustGet<HTMLDivElement>("codeContextPanel");
 const artifactOutput = mustGet<HTMLPreElement>("artifactOutput");
 const checkpointHint = mustGet<HTMLSpanElement>("checkpointHint");
 const submitDecisionButton = mustGet<HTMLButtonElement>("submitDecisionButton");
@@ -342,7 +345,104 @@ function renderStageList(
 
 function renderArtifact(stage: StageStatusResponse | null): void {
   artifactStage.textContent = stage ? `${stageLabel(stage.name)} · ${stage.status}` : "未选择阶段";
+  renderCodeContext(stage);
   artifactOutput.textContent = stage ? formatJson(stage.output) : "{}";
+}
+
+function renderCodeContext(stage: StageStatusResponse | null): void {
+  codeContextPanel.replaceChildren();
+  const view = buildCodeContextViewModel(stage?.output ?? null);
+  if (!view) {
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "code-context-header";
+  header.innerHTML = `
+    <span class="status-pill ${view.status === "COMPLETE" ? "success" : "warning"}">${view.status}</span>
+    <strong>代码上下文</strong>
+    <span>${Math.round(view.confidence * 100)}% confidence</span>
+  `;
+
+  const stats = document.createElement("div");
+  stats.className = "code-context-stats";
+  for (const [label, value] of [
+    ["已读文件", String(view.budgetUsage.filesRead)],
+    ["搜索次数", String(view.budgetUsage.searchesUsed)],
+    ["读取字节", String(view.budgetUsage.bytesRead)],
+    ["轮次", String(view.budgetUsage.roundsUsed)],
+  ]) {
+    const item = document.createElement("span");
+    item.textContent = `${label}: ${value}`;
+    stats.append(item);
+  }
+
+  const files = document.createElement("div");
+  files.className = "code-context-list";
+  files.append(sectionTitle("已读文件"));
+  files.append(...listItems(view.inspectedFiles));
+
+  const evidence = document.createElement("div");
+  evidence.className = "evidence-list";
+  evidence.append(sectionTitle("证据"));
+  for (const item of view.evidence.slice(0, 6)) {
+    const card = document.createElement("div");
+    card.className = "evidence-card";
+    const location = [item.filePath, item.lineStart ? `:${item.lineStart}` : ""].join("");
+    card.innerHTML = `
+      <strong>${escapeText(location)}</strong>
+      <span>${escapeText(item.relevanceReason ?? "")}</span>
+      <p>${escapeText(item.excerpt ?? "")}</p>
+    `;
+    evidence.append(card);
+  }
+
+  const trace = document.createElement("div");
+  trace.className = "trace-list";
+  trace.append(sectionTitle("探索轨迹"));
+  for (const step of view.trace.slice(0, 8)) {
+    const row = document.createElement("div");
+    row.className = "trace-row";
+    row.textContent = `${step.stepIndex ?? "-"} · ${step.actionType} · ${step.resultSummary ?? step.reason ?? ""}`;
+    trace.append(row);
+  }
+
+  const questions = document.createElement("div");
+  questions.className = "code-context-list";
+  questions.append(sectionTitle("开放问题"));
+  questions.append(...listItems(view.openQuestions));
+
+  codeContextPanel.append(header, stats, files, evidence, trace, questions);
+}
+
+function sectionTitle(text: string): HTMLElement {
+  const title = document.createElement("h3");
+  title.className = "mini-heading";
+  title.textContent = text;
+  return title;
+}
+
+function listItems(values: string[]): HTMLElement[] {
+  if (values.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-text";
+    empty.textContent = "无";
+    return [empty];
+  }
+  return values.slice(0, 8).map((value) => {
+    const item = document.createElement("p");
+    item.className = "context-list-item";
+    item.textContent = value;
+    return item;
+  });
+}
+
+function escapeText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function renderCheckpoint(stage: StageStatusResponse | null): void {

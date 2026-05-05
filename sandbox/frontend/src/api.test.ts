@@ -86,11 +86,48 @@ async function testApiErrorKeepsBackendMessage(): Promise<void> {
   );
 }
 
+async function testGetPipelineParsesCodeContextAndExplorationTrace(): Promise<void> {
+  const client = new PipelineApiClient("/api/v1", async () =>
+    new Response(
+      JSON.stringify({
+        pipelineId: "p-ctx",
+        status: "SUSPENDED",
+        currentStage: "REQUIREMENT_ANALYSIS",
+        repository: null,
+        stages: [
+          {
+            name: "REQUIREMENT_ANALYSIS",
+            status: "COMPLETED",
+            requiresHumanApproval: false,
+            output: {
+              codeContext: {
+                status: "COMPLETE",
+                inspectedFiles: ["src/health_service.py"],
+                evidence: [{ filePath: "src/health_service.py" }],
+              },
+              explorationTrace: [{ actionType: "PLAN", reason: "plan exploration" }],
+            },
+          },
+        ],
+      }),
+      { status: 200 },
+    ),
+  );
+
+  const response = await client.getPipeline("p-ctx");
+  const stage = response.stages[0];
+
+  assert.ok(stage);
+  assert.equal(stage.output.codeContext?.status, "COMPLETE");
+  assert.equal(stage.output.explorationTrace?.[0]?.actionType, "PLAN");
+}
+
 async function main(): Promise<void> {
   await testCreatePipelineUsesControlPlaneContract();
   await testCreatePipelineSupportsAdvancedRepositoryOptions();
   await testSubmitCheckpointEncodesStageAndBody();
   await testApiErrorKeepsBackendMessage();
+  await testGetPipelineParsesCodeContextAndExplorationTrace();
 }
 
 main().catch((error) => {

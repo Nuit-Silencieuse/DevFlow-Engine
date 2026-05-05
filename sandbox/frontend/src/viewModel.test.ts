@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   buildCreatePipelineRequest,
+  buildCodeContextViewModel,
   formatJson,
   hasArtifact,
   parsePathList,
@@ -79,11 +80,54 @@ function testFormattingHelpers(): void {
   assert.match(formatJson({ a: 1 }), /"a": 1/);
 }
 
+function testBuildCodeContextViewModelFromStageOutput(): void {
+  const view = buildCodeContextViewModel({
+    codeContext: {
+      status: "DEGRADED",
+      inspectedFiles: ["src/health_service.py"],
+      searchQueries: ["health", "worker"],
+      evidence: [
+        {
+          filePath: "src/health_service.py",
+          lineStart: 1,
+          lineEnd: 40,
+          excerpt: "health summary",
+          relevanceReason: "matches health requirement",
+          supports: ["health"],
+        },
+      ],
+      skippedPaths: [{ path: "logs/runtime.log", reason: "EXCLUDED", detail: "default exclude" }],
+      budgetUsage: { roundsUsed: 1, filesRead: 1, bytesRead: 200, searchesUsed: 2 },
+      confidence: 0.42,
+      openQuestions: ["需要确认 worker 状态来源"],
+    },
+    explorationTrace: [
+      {
+        stepIndex: 1,
+        roundIndex: 1,
+        actionType: "PLAN",
+        reason: "plan exploration",
+        resultSummary: "search health",
+        selectedFiles: [],
+      },
+    ],
+  });
+
+  assert.equal(view?.status, "DEGRADED");
+  assert.equal(view?.inspectedFiles[0], "src/health_service.py");
+  assert.equal(view?.evidence[0].filePath, "src/health_service.py");
+  assert.equal(view?.skippedPaths[0].reason, "EXCLUDED");
+  assert.equal(view?.budgetUsage.filesRead, 1);
+  assert.equal(view?.trace[0].actionType, "PLAN");
+  assert.equal(view?.openQuestions[0], "需要确认 worker 状态来源");
+}
+
 function main(): void {
   testBuildCreateRequestOmitsEmptyRepository();
   testBuildCreateRequestNormalizesRepositoryContext();
   testSelectReviewStagePrefersCurrentStage();
   testFormattingHelpers();
+  testBuildCodeContextViewModelFromStageOutput();
 }
 
 main();

@@ -122,6 +122,7 @@ class RequirementAgent:
                 "candidate_files": context_pack.get("candidate_files"),
                 "evidence": context_pack.get("evidence"),
                 "budget_usage": context_pack.get("budget_usage"),
+                "exploration_trace": context_pack.get("exploration_trace"),
                 "files": [
                     {
                         "path": file.get("path"),
@@ -225,14 +226,18 @@ class RequirementAgent:
             "open_questions": list(context_pack.get("open_questions", [])),
             "notes": list(context_pack.get("notes", [])),
             "total_bytes": context_pack.get("total_bytes", 0),
+            "exploration_trace": list(context_pack.get("exploration_trace", [])),
             "source": "requirement_agent",
         }
         code_context_camel = code_context_to_camel(code_context)
+        exploration_trace = list(context_pack.get("exploration_trace", []))
         return {
             "result": {
                 "structured_prd": prd,
                 "code_context": code_context,
                 "codeContext": code_context_camel,
+                "exploration_trace": exploration_trace,
+                "explorationTrace": exploration_trace,
                 "current_step": REQUIREMENT_ANALYSIS,
                 "error_logs": list(state.get("errors", [])),
             }
@@ -268,6 +273,8 @@ class RequirementAgent:
                     "search_queries": [],
                     "source": "requirement_agent",
                 },
+                "exploration_trace": [],
+                "explorationTrace": [],
                 "current_step": REQUIREMENT_ANALYSIS,
                 "error_logs": errors,
             }
@@ -355,6 +362,11 @@ def normalize_prd(
     quality = dict(draft.get("quality") or {})
     acceptance_criteria = normalize_acceptance_criteria(draft.get("acceptance_criteria"))
     open_questions = ensure_list(draft.get("open_questions"))
+    open_questions.extend(
+        question
+        for question in ensure_list(context_pack.get("open_questions"))
+        if question not in open_questions
+    )
     assumptions = ensure_list(draft.get("assumptions"))
     if feedback_text:
         assumptions.append(f"人工反馈已纳入需求分析参考: {feedback_text}")
@@ -573,13 +585,14 @@ def progressively_collect_context(
             if request.privacy_mode == "strict"
             else read_result.content[:500]
         )
+        supports = tuple(queries[:3]) if read_result.path in matched_paths or read_result.path in request.target_files else ()
         evidence_item = EvidenceItem(
             file_path=read_result.path,
             line_start=read_result.line_start,
             line_end=read_result.line_end,
             excerpt=excerpt,
             relevance_reason="该文件由需求关键词搜索或候选文件优先级选中。",
-            supports=tuple(queries[:3]),
+            supports=supports,
         )
         evidence.append(evidence_item_to_mapping(evidence_item))
         steps.append(
@@ -594,8 +607,13 @@ def progressively_collect_context(
             )
         )
 
-    confidence = 0.78 if evidence else 0.35
-    open_questions = [] if evidence else ["未能从代码库中找到足够证据，请补充目标文件或更明确的业务关键词。"]
+    strong_evidence_count = sum(1 for item in evidence if item.get("supports"))
+    confidence = min(0.88, 0.35 + strong_evidence_count * 0.22)
+    open_questions = []
+    if confidence < 0.5:
+        open_questions.append("未能从代码库中找到足够证据，请补充目标文件或更明确的业务关键词。")
+    if budget_exhausted := any(item.get("reason") == "BUDGET_EXHAUSTED" for item in skipped_paths):
+        open_questions.append("探索预算已耗尽，部分候选路径尚未读取。")
     budget_usage = BudgetUsage(
         rounds_used=1,
         files_read=len(inspected_files),
@@ -612,9 +630,8 @@ def progressively_collect_context(
         )
     )
 
-    budget_exhausted = any(item.get("reason") == "BUDGET_EXHAUSTED" for item in skipped_paths)
     return {
-        "status": "DEGRADED" if budget_exhausted or not evidence else "COMPLETE",
+        "status": "DEGRADED" if budget_exhausted or confidence < 0.5 else "COMPLETE",
         "root_path": str(request.resolved_root),
         "files": files,
         "inspected_files": inspected_files,
@@ -656,7 +673,19 @@ def summarize_context_for_prompt(context_pack: dict[str, Any]) -> dict[str, Any]
 
 def extract_search_queries(requirement_text: str) -> tuple[str, ...]:
     ascii_words = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", requirement_text)
-    stop_words = {"with", "from", "that", "this", "and", "for", "the", "page", "build"}
+    stop_words = {
+        "with",
+        "from",
+        "that",
+        "this",
+        "and",
+        "for",
+        "the",
+        "page",
+        "build",
+        "implement",
+        "implementation",
+    }
     queries = [
         word
         for word in ascii_words
@@ -774,6 +803,7 @@ def code_context_to_camel(code_context: dict[str, Any]) -> dict[str, Any]:
         "confidence": code_context.get("confidence", 0.0),
         "openQuestions": code_context.get("open_questions", []),
         "notes": code_context.get("notes", []),
+        "explorationTrace": code_context.get("exploration_trace", []),
     }
 
 

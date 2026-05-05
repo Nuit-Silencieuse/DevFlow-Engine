@@ -111,22 +111,22 @@
 
 > 先编写这些测试，并确认它们在实现前失败。
 
-- [ ] T019-U035 [P] [US3] 在 `execution-plane/tests/test_requirement_agent.py` 添加 explorationTrace 记录 PLAN、LIST_FILES、SEARCH_TEXT、READ_FILE、EVALUATE 步骤的失败测试
-- [ ] T019-U036 [P] [US3] 在 `execution-plane/tests/test_requirement_agent.py` 添加信息不足时输出 openQuestions 和低 confidence 的失败测试
-- [ ] T019-U037 [P] [US3] 在 `control-plane/devflow-engine/src/test/java/com/devflow/engine/service/PipelineServiceTest.java` 添加 Stage outputPayload 保留 codeContext 和 explorationTrace 的测试
-- [ ] T019-U038 [P] [US3] 在 `sandbox/frontend/src/viewModel.test.ts` 添加 codeContext 状态、证据、预算和跳过路径展示模型测试
-- [ ] T019-U039 [P] [US3] 在 `sandbox/frontend/src/api.test.ts` 添加 GET pipeline 响应解析 codeContext 和 explorationTrace 的测试
+- [X] T019-U035 [P] [US3] 在 `execution-plane/tests/test_requirement_agent.py` 添加 explorationTrace 记录 PLAN、LIST_FILES、SEARCH_TEXT、READ_FILE、EVALUATE 步骤的失败测试
+- [X] T019-U036 [P] [US3] 在 `execution-plane/tests/test_requirement_agent.py` 添加信息不足时输出 openQuestions 和低 confidence 的失败测试
+- [X] T019-U037 [P] [US3] 在 `control-plane/devflow-engine/src/test/java/com/devflow/engine/service/PipelineServiceTest.java` 添加 Stage outputPayload 保留 codeContext 和 explorationTrace 的测试
+- [X] T019-U038 [P] [US3] 在 `sandbox/frontend/src/viewModel.test.ts` 添加 codeContext 状态、证据、预算和跳过路径展示模型测试
+- [X] T019-U039 [P] [US3] 在 `sandbox/frontend/src/api.test.ts` 添加 GET pipeline 响应解析 codeContext 和 explorationTrace 的测试
 
 ### 用户故事 3 的实施
 
-- [ ] T019-U040 [US3] 在 `execution-plane/src/context/repository_context.py` 为每个工具调用生成 ExplorationStep，并在中文注释中说明 trace 与最终证据的区别
-- [ ] T019-U041 [US3] 在 `execution-plane/src/agents/requirement_agent.py` 汇总 evidence、candidateFiles、skippedPaths、budgetUsage、confidence、openQuestions 和 explorationTrace
-- [ ] T019-U042 [US3] 在 `execution-plane/src/llm/tracing.py` 记录渐进探索工具输入、结果摘要和 LLM 消息，避免写入疑似密钥原文
-- [ ] T019-U043 [US3] 在 `control-plane/devflow-engine/src/main/java/com/devflow/engine/api/StageStatusResponse.java` 确保阶段输出可以透传 codeContext 和 explorationTrace
-- [ ] T019-U044 [US3] 在 `sandbox/frontend/src/types.ts` 增加 CodeContextSummary、EvidenceItem、ExplorationStep、BudgetUsage 类型
-- [ ] T019-U045 [US3] 在 `sandbox/frontend/src/viewModel.ts` 增加 codeContext 展示 view model，包含状态、已读文件、搜索词、证据、预算、跳过原因和开放问题
-- [ ] T019-U046 [US3] 在 `sandbox/frontend/src/main.ts` 和 `sandbox/frontend/src/styles.css` 实现中间产物展示区域，避免证据卡片文本溢出或遮挡
-- [ ] T019-U047 [US3] 使用 `execution-plane/tests/test_requirement_agent.py`、`control-plane/devflow-engine/src/test/java/com/devflow/engine/service/PipelineServiceTest.java`、`sandbox/frontend/src/viewModel.test.ts`、`sandbox/frontend/src/api.test.ts` 验证用户故事 3 测试通过
+- [X] T019-U040 [US3] 在 `execution-plane/src/context/repository_context.py` 为每个工具调用生成 ExplorationStep，并在中文注释中说明 trace 与最终证据的区别
+- [X] T019-U041 [US3] 在 `execution-plane/src/agents/requirement_agent.py` 汇总 evidence、candidateFiles、skippedPaths、budgetUsage、confidence、openQuestions 和 explorationTrace
+- [X] T019-U042 [US3] 在 `execution-plane/src/llm/tracing.py` 记录渐进探索工具输入、结果摘要和 LLM 消息，避免写入疑似密钥原文
+- [X] T019-U043 [US3] 在 `control-plane/devflow-engine/src/main/java/com/devflow/engine/api/StageStatusResponse.java` 确保阶段输出可以透传 codeContext 和 explorationTrace
+- [X] T019-U044 [US3] 在 `sandbox/frontend/src/types.ts` 增加 CodeContextSummary、EvidenceItem、ExplorationStep、BudgetUsage 类型
+- [X] T019-U045 [US3] 在 `sandbox/frontend/src/viewModel.ts` 增加 codeContext 展示 view model，包含状态、已读文件、搜索词、证据、预算、跳过原因和开放问题
+- [X] T019-U046 [US3] 在 `sandbox/frontend/src/main.ts` 和 `sandbox/frontend/src/styles.css` 实现中间产物展示区域，避免证据卡片文本溢出或遮挡
+- [X] T019-U047 [US3] 使用 `execution-plane/tests/test_requirement_agent.py`、`control-plane/devflow-engine/src/test/java/com/devflow/engine/service/PipelineServiceTest.java`、`sandbox/frontend/src/viewModel.test.ts`、`sandbox/frontend/src/api.test.ts` 验证用户故事 3 测试通过
 
 **检查点**: 用户可以审查探索过程、证据、预算和不确定问题。
 
