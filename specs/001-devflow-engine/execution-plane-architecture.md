@@ -512,3 +512,37 @@ T019 已在 `execution-plane/src/context/` 中实现路径驱动的代码库上�
 - `code_context`: 执行平面上下文工具生成的上下文包或探索摘要。
 
 Temporal 仍负责流水线阶段的持久调度和失败重试；上下文工具只负责在某个 Activity 执行期间受控读取代码库，为 LangGraph 节点和 Agent 提供输入材料。
+## 渐进式代码库探索 Agent
+
+T019 升级后，执行平面的 RequirementAgent 不再要求用户手写 `includePaths` / `excludePaths` 才能感知项目代码。常规入口只需要 `repository.rootPath`，Agent 会在有限预算内按“规划 -> 发现文件 -> 搜索文本 -> 读取片段 -> 评估充分性”的顺序调用上下文工具。Temporal 仍负责外层工作流和 Activity 重试，LangGraph 负责 RequirementAgent 内部这些细粒度节点的状态推进。
+
+### 工具调用流程
+
+1. `PLAN`: 从自然语言需求抽取搜索词，并确定本轮探索目标。
+2. `LIST_FILES`: 调用 `list_repository(request)`，在 `rootPath` 边界内列出候选文件，同时应用默认排除规则和用户高级约束。
+3. `SEARCH_TEXT`: 调用 `search_text(request, query, max_results)`，用需求关键词定位代码信号，结果只返回路径、行号和预览片段。
+4. `READ_FILE`: 调用 `read_file_range(request, path, line_start, line_end, max_bytes)`，只读取少量高相关文件片段，不把整仓库塞进 Prompt。
+5. `EVALUATE`: 汇总 evidence、预算消耗和开放问题，判断 `COMPLETE` 或 `DEGRADED`。
+
+### 状态字段
+
+- `RepositoryExplorationRequest`: 用户输入和高级约束，包含 `rootPath`、`includePaths`、`excludePaths`、`targetFiles`、`maxRounds`、`maxFiles`、`maxBytes`、`maxSearchResults`、`privacyMode`。
+- `ExplorationSession`: 单次探索过程的运行态容器，保存请求、候选文件、已读文件、证据和预算。
+- `ExplorationStep`: 面向审计的轨迹记录，字段包括 `stepIndex`、`roundIndex`、`actionType`、`reason`、`input`、`resultSummary`、`selectedFiles`。
+- `EvidenceItem`: 最终可引用的代码证据，字段包括 `filePath`、`lineStart`、`lineEnd`、`excerpt`、`relevanceReason`、`supports`。
+- `BudgetUsage`: 预算消耗摘要，包含 `roundsUsed`、`filesRead`、`bytesRead`、`searchesUsed`。
+- `CodeContextSummary`: 阶段产物中的代码上下文摘要，包含 `status`、`rootPath`、`inspectedFiles`、`searchQueries`、`candidateFiles`、`evidence`、`skippedPaths`、`budgetUsage`、`confidence`、`openQuestions`、`explorationTrace`。
+
+### 中间产物
+
+RequirementAgent 的 Activity 输出同时保留蛇形命名和前端友好的驼峰命名：
+
+- `code_context` / `codeContext`: 用于后续 Design/Coder/Test/Review Agent 复用的代码上下文摘要。
+- `exploration_trace` / `explorationTrace`: 用于前端展示和排查“为什么读了这些文件”的过程轨迹。
+- `structured_prd`: LLM 基于需求文本和 `CodeContextSummary` 生成的结构化 PRD。
+
+这些字段被写入控制平面的 Stage `outputPayload`。前端通过阶段状态接口读取后，会把搜索词、已读文件、证据、预算、跳过路径和开放问题展示为中间产物面板。
+
+### 安全边界
+
+所有路径读取都先解析到 `rootPath` 内，任何目录逃逸都会被拒绝。默认排除规则覆盖 `.git`、依赖目录、构建产物、缓存、日志、`.env*`、`*secret*` 等敏感或低价值路径。`excludePaths` 优先级高于 `targetFiles`，用于用户主动限制范围、保护隐私或提升速度。`privacyMode=strict` 时 evidence 中只保留定位信息和摘要，不写入原始代码片段。

@@ -321,3 +321,38 @@ Agent 遇到可恢复业务错误时，应返回:
 - `execution-plane-architecture.md` 中对应模块的实现状态。
 - 如输出结构变化，更新本文档和 `contracts/workflow.md`。
 - 关键代码和复杂方法需要中文注释，说明设计意图、状态流转和失败处理策略。
+## RequirementAgent 渐进式探索设计
+
+T019 升级后，RequirementAgent 的代码感知方式从“用户提供 include/exclude 后读取路径”改为“默认 rootPath 驱动的工具调用式渐进探索”。用户只需要提供需求文本和 `repository.rootPath`；`includePaths`、`excludePaths`、`targetFiles`、预算和隐私模式变成高级选项，只在用户主动限制范围、提升速度或保护隐私时使用。
+
+### 状态运转
+
+LangGraph 中 RequirementAgent 的节点顺序保持为 `prepare_input -> collect_context -> plan_analysis -> draft_prd -> validate_prd -> finalize`。其中 `collect_context` 内部再执行一个有限探索循环：
+
+1. `PLAN`: 从需求文本中抽取英文标识符、模块名和业务关键词，形成搜索计划。
+2. `LIST_FILES`: 调用仓库列表工具形成候选文件池，记录默认排除和用户排除路径。
+3. `SEARCH_TEXT`: 按关键词检索候选代码信号，收集命中文件和行号。
+4. `READ_FILE`: 按预算读取目标文件和命中文件的前部片段，形成证据。
+5. `EVALUATE`: 根据证据数量、预算耗尽情况和命中强度计算置信度，必要时产生 `openQuestions`。
+
+这些状态转移属于 Agent 内部推理与工具使用过程。Temporal 只知道 `REQUIREMENT_ANALYSIS` Activity 成功、失败、重试和输出，不维护这些细粒度探索状态。
+
+### 工具与输入
+
+- `list_repository`: 发现仓库轮廓，默认跳过依赖、构建产物、缓存、日志和密钥类路径。
+- `search_text`: 用需求关键词定位候选模块，只返回路径、行号和短预览。
+- `read_file_range`: 读取有限行范围，并执行 rootPath 边界校验、字节预算和二进制文件保护。
+- `LlmClient.complete_json`: 在收集到 `CodeContextSummary` 后生成结构化 PRD。
+- `LlmTraceRecorder`: 记录上下文包、LLM 请求和响应，便于终端与日志文件审查。
+
+### 规划范式
+
+当前实现采用保守的任务优先分解：先根据需求构造搜索词，再以候选文件和搜索结果共同决定读取顺序。`targetFiles` 会提高读取优先级，但不会关闭自动搜索；`excludePaths` 始终优先，避免 Agent 读取用户明确禁止的路径。这样可以模拟 Codex/Claude Code 的“渐进式披露”：先看目录轮廓，再搜索，再读取少量证据，而不是一次性把仓库全部送入 Prompt。
+
+### 效果保障
+
+- 证据约束：PRD Prompt 中注入 `inspectedFiles`、`searchQueries`、`evidence` 和 `openQuestions`，要求 LLM 基于已读代码表达结论。
+- 预算约束：`maxFiles`、`maxBytes`、`maxSearchResults` 防止扫描失控；预算不足时返回 `DEGRADED`。
+- 可审计性：`explorationTrace` 记录每个工具调用的原因、输入摘要、结果摘要和选中文件。
+- 安全性：所有路径都必须落在 `rootPath` 内，默认排除 `.env*`、`*secret*`、日志和构建产物。
+- 测试策略：单元测试覆盖默认探索、高级约束、证据汇总、低置信度和前端展示；`progressive_exploration_smoke.py` 使用本项目仓库做真实上下文工具 smoke test。

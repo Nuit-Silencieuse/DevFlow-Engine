@@ -80,3 +80,27 @@ npm.cmd run build
 - 所有读取路径都在 `rootPath` 内。
 - 默认排除规则覆盖依赖、构建产物、缓存、日志和密钥类文件。
 - 使用本项目代码库作为目标仓库完成一次真实上下文工具测试。
+
+## 实现后的真实仓库 Smoke Test
+
+本功能完成后，使用项目自身作为目标代码库执行一次上下文工具 smoke test。该脚本使用 FakeProvider 固定 LLM 输出，因此不会访问外部网络，但 `list_repository`、`search_text`、`read_file_range` 都会真实读取当前仓库。
+
+```powershell
+cd execution-plane
+.\venv\python.exe scripts\progressive_exploration_smoke.py
+```
+
+预期终端输出应包含：
+
+- `search_queries`: 从需求文本抽取出的搜索词，例如 `health`、`control`、`Temporal`、`worker`、`pipeline`。
+- `inspected_files`: 实际读取过的文件，至少包含 RequirementAgent、repository context 或前后端相关代码文件。
+- `evidence_count`: 大于 0，表示最终需求分析可以追溯到代码片段证据。
+- `trace_actions`: 包含 `PLAN`、`LIST_FILES`、`SEARCH_TEXT`、`READ_FILE`、`EVALUATE`。
+- `trace_file`: 指向 `execution-plane/logs/progressive-exploration-smoke.jsonl`。
+- `result_file`: 指向 `execution-plane/logs/progressive-exploration-smoke-result.json`。
+
+trace JSONL 文件中至少应出现三类事件：
+
+- `requirement_agent.context_pack`: 渐进探索工具的输入、候选文件、已读文件、证据和预算摘要。
+- `llm.request`: 发送给 LLM Client 的消息、schema、provider 和 model。
+- `llm.response`: FakeProvider 返回并解析后的结构化 PRD。

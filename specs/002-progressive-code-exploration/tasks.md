@@ -136,14 +136,14 @@
 
 **目的**: 补齐文档、真实仓库验证、全量测试和任务完成标记。
 
-- [ ] T019-U048 [P] 在 `specs/002-progressive-code-exploration/quickstart.md` 补充实现后的本项目真实仓库 smoke test 步骤和预期 trace 输出字段
-- [ ] T019-U049 [P] 在 `specs/001-devflow-engine/execution-plane.md` 补充渐进探索 Agent 的工具调用流程、状态字段和中间产物说明
-- [ ] T019-U050 [P] 在 `specs/001-devflow-engine/agent-design.md` 补充 RequirementAgent 从路径驱动升级为渐进探索 Agent 的设计说明
-- [ ] T019-U051 使用 `execution-plane/tests/test_context_tools.py` 和 `execution-plane/tests/test_requirement_agent.py` 运行 Python 单元测试，并记录失败修复到相关实现文件
-- [ ] T019-U052 使用 `control-plane/devflow-engine/src/test/java/com/devflow/engine/api/PipelineControllerContractTest.java` 和 `control-plane/devflow-engine/src/test/java/com/devflow/engine/service/PipelineServiceTest.java` 运行 Maven 测试，并记录失败修复到相关实现文件
-- [ ] T019-U053 使用 `sandbox/frontend/src/api.test.ts` 和 `sandbox/frontend/src/viewModel.test.ts` 运行前端测试与构建，并记录失败修复到相关实现文件
-- [ ] T019-U054 使用 `execution-plane/scripts/llm_smoke_test.py` 或新增 `execution-plane/scripts/progressive_exploration_smoke.py` 以本项目代码库为目标执行真实上下文工具 smoke test，并确认输出包含搜索词、已读文件、证据和 trace 文件路径
-- [ ] T019-U055 在 `specs/002-progressive-code-exploration/tasks.md` 将已完成任务勾选，并保持任务编号、故事标签和文件路径格式一致
+- [X] T019-U048 [P] 在 `specs/002-progressive-code-exploration/quickstart.md` 补充实现后的本项目真实仓库 smoke test 步骤和预期 trace 输出字段
+- [X] T019-U049 [P] 在 `specs/001-devflow-engine/execution-plane.md` 补充渐进探索 Agent 的工具调用流程、状态字段和中间产物说明
+- [X] T019-U050 [P] 在 `specs/001-devflow-engine/agent-design.md` 补充 RequirementAgent 从路径驱动升级为渐进探索 Agent 的设计说明
+- [X] T019-U051 使用 `execution-plane/tests/test_context_tools.py` 和 `execution-plane/tests/test_requirement_agent.py` 运行 Python 单元测试，并记录失败修复到相关实现文件
+- [X] T019-U052 使用 `control-plane/devflow-engine/src/test/java/com/devflow/engine/api/PipelineControllerContractTest.java` 和 `control-plane/devflow-engine/src/test/java/com/devflow/engine/service/PipelineServiceTest.java` 运行 Maven 测试，并记录失败修复到相关实现文件
+- [X] T019-U053 使用 `sandbox/frontend/src/api.test.ts` 和 `sandbox/frontend/src/viewModel.test.ts` 运行前端测试与构建，并记录失败修复到相关实现文件
+- [X] T019-U054 使用 `execution-plane/scripts/llm_smoke_test.py` 或新增 `execution-plane/scripts/progressive_exploration_smoke.py` 以本项目代码库为目标执行真实上下文工具 smoke test，并确认输出包含搜索词、已读文件、证据和 trace 文件路径
+- [X] T019-U055 在 `specs/002-progressive-code-exploration/tasks.md` 将已完成任务勾选，并保持任务编号、故事标签和文件路径格式一致
 
 ---
 
