@@ -293,8 +293,11 @@ public class PipelineService {
             normalizePathList(repository.includePaths()),
             normalizePathList(repository.excludePaths()),
             normalizePathList(repository.targetFiles()),
+            repository.maxRounds(),
             repository.maxFiles() == null || repository.maxFiles() <= 0 ? DEFAULT_MAX_FILES : repository.maxFiles(),
-            repository.maxBytes() == null || repository.maxBytes() <= 0 ? DEFAULT_MAX_BYTES : repository.maxBytes()
+            repository.maxBytes() == null || repository.maxBytes() <= 0 ? DEFAULT_MAX_BYTES : repository.maxBytes(),
+            repository.maxSearchResults(),
+            repository.privacyMode()
         );
     }
 
@@ -314,8 +317,11 @@ public class PipelineService {
         value.put("includePaths", repository.includePaths());
         value.put("excludePaths", repository.excludePaths());
         value.put("targetFiles", repository.targetFiles());
+        value.put("maxRounds", repository.maxRounds());
         value.put("maxFiles", repository.maxFiles());
         value.put("maxBytes", repository.maxBytes());
+        value.put("maxSearchResults", repository.maxSearchResults());
+        value.put("privacyMode", repository.privacyMode());
         return value;
     }
 
@@ -329,8 +335,11 @@ public class PipelineService {
             stringList(repository.get("includePaths")),
             stringList(repository.get("excludePaths")),
             stringList(repository.get("targetFiles")),
+            intValue(repository.get("maxRounds")),
             intValue(repository.get("maxFiles")),
-            longValue(repository.get("maxBytes"))
+            longValue(repository.get("maxBytes")),
+            intValue(repository.get("maxSearchResults")),
+            stringValue(repository.get("privacyMode"))
         );
     }
 

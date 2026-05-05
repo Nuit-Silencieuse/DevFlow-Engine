@@ -567,11 +567,17 @@ def progressively_collect_context(
         )
         inspected_files.append(read_result.path)
         total_bytes += read_result.bytes_read
+        excerpt = (
+            f"{read_result.path} lines {read_result.line_start}-{read_result.line_end}; "
+            f"{read_result.bytes_read} bytes read; content redacted by strict privacy mode."
+            if request.privacy_mode == "strict"
+            else read_result.content[:500]
+        )
         evidence_item = EvidenceItem(
             file_path=read_result.path,
             line_start=read_result.line_start,
             line_end=read_result.line_end,
-            excerpt=read_result.content[:500],
+            excerpt=excerpt,
             relevance_reason="该文件由需求关键词搜索或候选文件优先级选中。",
             supports=tuple(queries[:3]),
         )
@@ -606,8 +612,9 @@ def progressively_collect_context(
         )
     )
 
+    budget_exhausted = any(item.get("reason") == "BUDGET_EXHAUSTED" for item in skipped_paths)
     return {
-        "status": "COMPLETE" if evidence else "DEGRADED",
+        "status": "DEGRADED" if budget_exhausted or not evidence else "COMPLETE",
         "root_path": str(request.resolved_root),
         "files": files,
         "inspected_files": inspected_files,

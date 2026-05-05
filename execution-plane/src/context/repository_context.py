@@ -345,27 +345,51 @@ def list_repository(request: RepositoryExplorationRequest) -> RepositoryListing:
     discovered: dict[str, RepositoryFile] = {}
     skipped: dict[str, SkippedFile] = {}
 
+    for exclude_path in request.exclude_paths:
+        skipped.setdefault(
+            exclude_path,
+            SkippedFile(
+                path=exclude_path,
+                reason="EXCLUDED",
+                detail="user exclude rule is active for this exploration",
+            ),
+        )
+
+    # targetFiles 是用户显式指出的高价值线索，即使 maxFiles 很小也应优先进入
+    # 候选集合。后续 include 扫描只能填充剩余预算，不能把目标文件挤掉。
+    for target_file in request.target_files:
+        resolved = _resolve_inside_root(root, target_file)
+        relative_path = _relative_path(root, resolved)
+        if _is_excluded(relative_path, request.exclude_paths):
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="EXCLUDED",
+                detail="target file is excluded by repository exploration rules",
+            )
+        elif resolved.is_file():
+            discovered[relative_path] = _repository_file(root, resolved, "target")
+        elif resolved.exists():
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="READ_ERROR",
+                detail="target path exists but is not a regular file",
+            )
+
     for include_path in request.effective_include_paths:
         resolved = _resolve_inside_root(root, include_path)
         _collect_repository_files(root, resolved, request, discovered, skipped)
         if len(discovered) >= request.budget.max_files:
-            break
-
-    for target_file in request.target_files:
-        resolved = _resolve_inside_root(root, target_file)
-        if resolved.is_file():
-            relative_path = _relative_path(root, resolved)
-            if _is_excluded(relative_path, request.exclude_paths):
-                skipped[relative_path] = SkippedFile(
-                    path=relative_path,
-                    reason="EXCLUDED",
-                    detail="target file is excluded by repository exploration rules",
-                )
-            else:
-                discovered[relative_path] = _repository_file(root, resolved, "target")
+            skipped.setdefault(
+                _normalize_path(include_path),
+                SkippedFile(
+                    path=_normalize_path(include_path),
+                    reason="BUDGET_EXHAUSTED",
+                    detail="maxFiles reached before this include path was fully scanned",
+                ),
+            )
 
     return RepositoryListing(
-        files=tuple(sorted(discovered.values(), key=lambda file: file.path)[: request.budget.max_files]),
+        files=tuple(list(discovered.values())[: request.budget.max_files]),
         skipped=tuple(sorted(skipped.values(), key=lambda item: item.path)),
     )
 
@@ -598,10 +622,21 @@ def _collect_repository_files(
     discovered: dict[str, RepositoryFile],
     skipped: dict[str, SkippedFile],
 ) -> None:
-    if len(discovered) >= request.budget.max_files or not current.exists():
+    if not current.exists():
         return
 
     relative_path = _relative_path(root, current)
+    if len(discovered) >= request.budget.max_files:
+        skipped.setdefault(
+            relative_path,
+            SkippedFile(
+                path=relative_path,
+                reason="BUDGET_EXHAUSTED",
+                detail="maxFiles reached before this path could be added",
+            ),
+        )
+        return
+
     if _is_excluded(relative_path, request.exclude_paths):
         skipped[relative_path] = SkippedFile(
             path=relative_path,
@@ -618,15 +653,13 @@ def _collect_repository_files(
                 detail="binary-like file skipped during repository listing",
             )
             return
-        discovered[relative_path] = _repository_file(root, current)
+        discovered.setdefault(relative_path, _repository_file(root, current))
         return
 
     if not current.is_dir():
         return
 
     for child in sorted(current.iterdir(), key=lambda item: item.name.casefold()):
-        if len(discovered) >= request.budget.max_files:
-            return
         _collect_repository_files(root, child, request, discovered, skipped)
 
 

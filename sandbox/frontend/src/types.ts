@@ -10,11 +10,14 @@ export type CheckpointDecision = "APPROVE" | "REJECT";
 
 export interface RepositoryContext {
   rootPath: string;
-  includePaths: string[];
-  excludePaths: string[];
-  targetFiles: string[];
-  maxFiles: number;
-  maxBytes: number;
+  includePaths?: string[];
+  excludePaths?: string[];
+  targetFiles?: string[];
+  maxRounds?: number;
+  maxFiles?: number;
+  maxBytes?: number;
+  maxSearchResults?: number;
+  privacyMode?: "standard" | "strict";
 }
 
 export interface CreatePipelineRequest {

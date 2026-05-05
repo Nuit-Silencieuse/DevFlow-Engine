@@ -180,6 +180,56 @@ class RepositoryContextToolsTest(unittest.TestCase):
         self.assertTrue(result.truncated)
         self.assertIn("健康检查", result.content)
 
+    def test_exclude_paths_are_never_listed_searched_or_read(self):
+        request = RepositoryExplorationRequest.from_mapping(
+            {
+                "rootPath": str(self.progressive_fixture_root),
+                "excludePaths": ["src/temporal_worker.py"],
+            }
+        )
+
+        listing = list_repository(request)
+        candidate_paths = {file.path for file in listing.files}
+        skipped_paths = {item.path for item in listing.skipped}
+
+        self.assertIn("src/health_service.py", candidate_paths)
+        self.assertNotIn("src/temporal_worker.py", candidate_paths)
+        self.assertIn("src/temporal_worker.py", skipped_paths)
+        self.assertFalse(any(match.path == "src/temporal_worker.py" for match in search_text(request, "worker")))
+        with self.assertRaises(ValueError):
+            read_file_range(request, "src/temporal_worker.py")
+
+    def test_target_files_are_prioritized_even_with_small_file_budget(self):
+        request = RepositoryExplorationRequest.from_mapping(
+            {
+                "rootPath": str(self.progressive_fixture_root),
+                "targetFiles": ["src/temporal_worker.py"],
+                "maxFiles": 1,
+            }
+        )
+
+        listing = list_repository(request)
+
+        self.assertEqual([file.path for file in listing.files], ["src/temporal_worker.py"])
+        self.assertTrue(any(item.reason == "BUDGET_EXHAUSTED" for item in listing.skipped))
+
+    def test_small_budget_records_exhaustion_and_limits_read_bytes(self):
+        request = RepositoryExplorationRequest.from_mapping(
+            {
+                "rootPath": str(self.progressive_fixture_root),
+                "maxFiles": 1,
+                "maxBytes": 80,
+            }
+        )
+
+        listing = list_repository(request)
+        read_result = read_file_range(request, listing.files[0].path)
+
+        self.assertEqual(len(listing.files), 1)
+        self.assertTrue(any(item.reason == "BUDGET_EXHAUSTED" for item in listing.skipped))
+        self.assertLessEqual(read_result.bytes_read, 80)
+        self.assertTrue(read_result.truncated)
+
     def test_lists_reads_searches_and_packs_temporary_repository(self):
         with self.temporary_repository() as repo_dir:
             root = Path(repo_dir)

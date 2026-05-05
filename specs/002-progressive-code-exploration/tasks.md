@@ -81,21 +81,21 @@
 
 > 先编写这些测试，并确认它们在实现前失败。
 
-- [ ] T019-U023 [P] [US2] 在 `execution-plane/tests/test_context_tools.py` 添加 excludePaths 严格禁止搜索、读取、进入 evidence 的失败测试
-- [ ] T019-U024 [P] [US2] 在 `execution-plane/tests/test_context_tools.py` 添加 targetFiles 优先进入候选集合且预算内仍可补充搜索的失败测试
-- [ ] T019-U025 [P] [US2] 在 `execution-plane/tests/test_context_tools.py` 添加 maxRounds、maxFiles、maxBytes 触发预算耗尽和 skippedPaths 说明的失败测试
-- [ ] T019-U026 [P] [US2] 在 `control-plane/devflow-engine/src/test/java/com/devflow/engine/api/PipelineControllerContractTest.java` 添加 repository 高级字段可选且 rootPath 是常规最小字段的契约测试
-- [ ] T019-U027 [P] [US2] 在 `sandbox/frontend/src/api.test.ts` 添加 CreatePipelineRequest 支持高级 repository 选项且默认不要求 include/exclude 的测试
+- [X] T019-U023 [P] [US2] 在 `execution-plane/tests/test_context_tools.py` 添加 excludePaths 严格禁止搜索、读取、进入 evidence 的失败测试
+- [X] T019-U024 [P] [US2] 在 `execution-plane/tests/test_context_tools.py` 添加 targetFiles 优先进入候选集合且预算内仍可补充搜索的失败测试
+- [X] T019-U025 [P] [US2] 在 `execution-plane/tests/test_context_tools.py` 添加 maxRounds、maxFiles、maxBytes 触发预算耗尽和 skippedPaths 说明的失败测试
+- [X] T019-U026 [P] [US2] 在 `control-plane/devflow-engine/src/test/java/com/devflow/engine/api/PipelineControllerContractTest.java` 添加 repository 高级字段可选且 rootPath 是常规最小字段的契约测试
+- [X] T019-U027 [P] [US2] 在 `sandbox/frontend/src/api.test.ts` 添加 CreatePipelineRequest 支持高级 repository 选项且默认不要求 include/exclude 的测试
 
 ### 用户故事 2 的实施
 
-- [ ] T019-U028 [US2] 在 `execution-plane/src/context/repository_context.py` 实现 includePaths、excludePaths、targetFiles 的合并、冲突处理和 exclude 优先规则
-- [ ] T019-U029 [US2] 在 `execution-plane/src/context/repository_context.py` 实现预算耗尽时的 DEGRADED 摘要、skippedPaths 记录和隐私模式下的 excerpt 降级
-- [ ] T019-U030 [US2] 在 `execution-plane/src/agents/requirement_agent.py` 接入高级约束配置，确保用户显式约束只收窄探索边界，不改变渐进探索主流程
-- [ ] T019-U031 [US2] 在 `control-plane/devflow-engine/src/main/java/com/devflow/engine/api/RepositoryContext.java` 增加 targetFiles、maxRounds、maxFiles、maxBytes、maxSearchResults、privacyMode 字段
-- [ ] T019-U032 [US2] 在 `control-plane/devflow-engine/src/main/java/com/devflow/engine/api/CreatePipelineRequest.java` 保持 repository 可选，并确保仅提供 rootPath 的请求仍可创建流水线
-- [ ] T019-U033 [US2] 在 `sandbox/frontend/src/types.ts` 和 `sandbox/frontend/src/api.ts` 增加高级 repository 选项类型，保持 include/exclude 在 UI 层可省略
-- [ ] T019-U034 [US2] 使用 `execution-plane/tests/test_context_tools.py`、`control-plane/devflow-engine/src/test/java/com/devflow/engine/api/PipelineControllerContractTest.java`、`sandbox/frontend/src/api.test.ts` 验证用户故事 2 测试通过
+- [X] T019-U028 [US2] 在 `execution-plane/src/context/repository_context.py` 实现 includePaths、excludePaths、targetFiles 的合并、冲突处理和 exclude 优先规则
+- [X] T019-U029 [US2] 在 `execution-plane/src/context/repository_context.py` 实现预算耗尽时的 DEGRADED 摘要、skippedPaths 记录和隐私模式下的 excerpt 降级
+- [X] T019-U030 [US2] 在 `execution-plane/src/agents/requirement_agent.py` 接入高级约束配置，确保用户显式约束只收窄探索边界，不改变渐进探索主流程
+- [X] T019-U031 [US2] 在 `control-plane/devflow-engine/src/main/java/com/devflow/engine/api/RepositoryContext.java` 增加 targetFiles、maxRounds、maxFiles、maxBytes、maxSearchResults、privacyMode 字段
+- [X] T019-U032 [US2] 在 `control-plane/devflow-engine/src/main/java/com/devflow/engine/api/CreatePipelineRequest.java` 保持 repository 可选，并确保仅提供 rootPath 的请求仍可创建流水线
+- [X] T019-U033 [US2] 在 `sandbox/frontend/src/types.ts` 和 `sandbox/frontend/src/api.ts` 增加高级 repository 选项类型，保持 include/exclude 在 UI 层可省略
+- [X] T019-U034 [US2] 使用 `execution-plane/tests/test_context_tools.py`、`control-plane/devflow-engine/src/test/java/com/devflow/engine/api/PipelineControllerContractTest.java`、`sandbox/frontend/src/api.test.ts` 验证用户故事 2 测试通过
 
 **检查点**: 高级约束可控生效，默认体验仍只需要 rootPath。
 

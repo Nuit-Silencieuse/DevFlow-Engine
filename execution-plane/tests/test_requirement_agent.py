@@ -240,6 +240,56 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertIn("未提供 repository_context", result["code_context"]["notes"][0])
         self.assertEqual(result["structured_prd"]["source"], "requirement_agent")
 
+    def test_advanced_repository_constraints_limit_requirement_agent_exploration(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        fixture_root = Path(__file__).resolve().parent / "fixtures" / "progressive_repo"
+        agent = RequirementAgent(
+            llm_client=fake_llm_client(
+                {
+                    "summary": "分析健康检查约束",
+                    "user_stories": [
+                        {"role": "测试人员", "goal": "查看健康状态", "benefit": "确认环境可用"}
+                    ],
+                    "acceptance_criteria": [
+                        {
+                            "id": "AC-001",
+                            "description": "只读取允许范围内的健康检查文件",
+                            "verification": "检查 code_context.inspected_files",
+                        },
+                        {
+                            "id": "AC-002",
+                            "description": "预算不足时输出降级状态",
+                            "verification": "检查 code_context.status",
+                        },
+                    ],
+                }
+            )
+        )
+
+        result = agent.run(
+            {
+                "original_requirement": "Health check should show Temporal worker status.",
+                "repository_context": {
+                    "rootPath": str(fixture_root),
+                    "targetFiles": ["src/health_service.py"],
+                    "excludePaths": ["src/temporal_worker.py"],
+                    "maxFiles": 1,
+                    "maxBytes": 140,
+                    "privacyMode": "strict",
+                },
+            }
+        )
+
+        code_context = result["code_context"]
+        evidence_text = json.dumps(code_context["evidence"], ensure_ascii=False)
+        self.assertEqual(code_context["status"], "DEGRADED")
+        self.assertEqual(code_context["inspected_files"], ["src/health_service.py"])
+        self.assertNotIn("src/temporal_worker.py", code_context["inspected_files"])
+        self.assertTrue(any(item["reason"] == "BUDGET_EXHAUSTED" for item in code_context["skipped_paths"]))
+        self.assertTrue(any(item["path"] == "src/temporal_worker.py" for item in code_context["skipped_paths"]))
+        self.assertNotIn("class HealthService", evidence_text)
+
     def test_trace_file_contains_requirement_agent_intermediate_artifacts(self):
         from src.agents.requirement_agent import RequirementAgent
 

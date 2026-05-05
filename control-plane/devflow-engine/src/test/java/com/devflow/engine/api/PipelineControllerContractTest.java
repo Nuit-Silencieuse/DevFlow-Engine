@@ -49,8 +49,11 @@ class PipelineControllerContractTest {
                         "includePaths": ["src", "README.md"],
                         "excludePaths": ["node_modules", "dist", ".git"],
                         "targetFiles": ["src/App.tsx"],
+                        "maxRounds": 4,
                         "maxFiles": 50,
-                        "maxBytes": 65536
+                        "maxBytes": 65536,
+                        "maxSearchResults": 25,
+                        "privacyMode": "strict"
                       }
                     }
                     """))
@@ -65,8 +68,47 @@ class PipelineControllerContractTest {
         assertThat(repository.includePaths()).containsExactly("src", "README.md");
         assertThat(repository.excludePaths()).containsExactly("node_modules", "dist", ".git");
         assertThat(repository.targetFiles()).containsExactly("src/App.tsx");
+        assertThat(repository.maxRounds()).isEqualTo(4);
         assertThat(repository.maxFiles()).isEqualTo(50);
         assertThat(repository.maxBytes()).isEqualTo(65_536L);
+        assertThat(repository.maxSearchResults()).isEqualTo(25);
+        assertThat(repository.privacyMode()).isEqualTo("strict");
+    }
+
+    @Test
+    void createPipelineTreatsRepositoryAdvancedFieldsAsOptional() throws Exception {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000102");
+        when(pipelineService.createPipeline(any(CreatePipelineRequest.class)))
+            .thenReturn(new CreatePipelineResponse(pipelineId, "RUNNING"));
+
+        mockMvc.perform(post("/api/v1/pipelines")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "name": "Root only repository context",
+                      "requirement": "分析健康检查需求",
+                      "stages": ["REQUIREMENT_ANALYSIS"],
+                      "repository": {
+                        "rootPath": "D:/projects/demo-app"
+                      }
+                    }
+                    """))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.pipelineId", not(blankOrNullString())))
+            .andExpect(jsonPath("$.status").value("RUNNING"));
+
+        ArgumentCaptor<CreatePipelineRequest> requestCaptor = ArgumentCaptor.forClass(CreatePipelineRequest.class);
+        verify(pipelineService).createPipeline(requestCaptor.capture());
+        RepositoryContext repository = requestCaptor.getValue().repository();
+        assertThat(repository.rootPath()).isEqualTo("D:/projects/demo-app");
+        assertThat(repository.includePaths()).isNull();
+        assertThat(repository.excludePaths()).isNull();
+        assertThat(repository.targetFiles()).isNull();
+        assertThat(repository.maxRounds()).isNull();
+        assertThat(repository.maxFiles()).isNull();
+        assertThat(repository.maxBytes()).isNull();
+        assertThat(repository.maxSearchResults()).isNull();
+        assertThat(repository.privacyMode()).isNull();
     }
 
     @Test
@@ -82,8 +124,11 @@ class PipelineControllerContractTest {
                     List.of("src"),
                     List.of("node_modules", ".git"),
                     List.of("src/App.tsx"),
+                    4,
                     50,
-                    65_536L
+                    65_536L,
+                    25,
+                    "standard"
                 ),
                 List.of(new StageStatusResponse(
                     "SYSTEM_DESIGN",

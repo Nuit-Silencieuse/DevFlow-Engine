@@ -7,7 +7,10 @@ public record RepositoryContext(
     List<String> includePaths,
     List<String> excludePaths,
     List<String> targetFiles,
+    Integer maxRounds,
     Integer maxFiles,
-    Long maxBytes
+    Long maxBytes,
+    Integer maxSearchResults,
+    String privacyMode
 ) {
 }

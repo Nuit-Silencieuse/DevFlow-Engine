@@ -51,8 +51,11 @@ class PipelineServiceTest {
                 List.of("src", "README.md"),
                 List.of("node_modules", "dist", ".git"),
                 List.of("src/App.tsx"),
+                4,
                 50,
-                65_536L
+                65_536L,
+                25,
+                "standard"
             )
         ));
 
@@ -70,8 +73,11 @@ class PipelineServiceTest {
         assertThat(saved.getGlobalContext()).containsKey("repository");
         assertThat(repositoryMap(saved.getGlobalContext().get("repository")))
             .containsEntry("rootPath", "D:/projects/demo-app")
+            .containsEntry("maxRounds", 4)
             .containsEntry("maxFiles", 50)
-            .containsEntry("maxBytes", 65_536L);
+            .containsEntry("maxBytes", 65_536L)
+            .containsEntry("maxSearchResults", 25)
+            .containsEntry("privacyMode", "standard");
         assertThat(saved.getStages()).extracting("name")
             .containsExactly("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION");
         assertThat(saved.getStages().get(1).isRequiresHumanApproval()).isTrue();
