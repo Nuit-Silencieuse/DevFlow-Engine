@@ -51,21 +51,21 @@
 
 > 先编写这些测试，并确认它们在实现前失败。
 
-- [ ] T019-U011 [P] [US1] 在 `execution-plane/tests/test_context_tools.py` 添加 list_repository 默认跳过 node_modules/logs 且返回候选文件的失败测试
-- [ ] T019-U012 [P] [US1] 在 `execution-plane/tests/test_context_tools.py` 添加 search_text 按关键词返回文件路径、行号、预览片段和截断标记的失败测试
-- [ ] T019-U013 [P] [US1] 在 `execution-plane/tests/test_context_tools.py` 添加 read_file_range 按行范围读取、统计 bytesRead、处理超长片段的失败测试
-- [ ] T019-U014 [P] [US1] 在 `execution-plane/tests/test_requirement_agent.py` 添加仅传 rootPath 时 RequirementAgent 自动探索并生成 codeContext 的失败测试
-- [ ] T019-U015 [P] [US1] 在 `execution-plane/tests/test_requirement_agent.py` 添加 RequirementAgent 在无 repository 时退化为纯需求文本分析的失败测试
+- [X] T019-U011 [P] [US1] 在 `execution-plane/tests/test_context_tools.py` 添加 list_repository 默认跳过 node_modules/logs 且返回候选文件的失败测试
+- [X] T019-U012 [P] [US1] 在 `execution-plane/tests/test_context_tools.py` 添加 search_text 按关键词返回文件路径、行号、预览片段和截断标记的失败测试
+- [X] T019-U013 [P] [US1] 在 `execution-plane/tests/test_context_tools.py` 添加 read_file_range 按行范围读取、统计 bytesRead、处理超长片段的失败测试
+- [X] T019-U014 [P] [US1] 在 `execution-plane/tests/test_requirement_agent.py` 添加仅传 rootPath 时 RequirementAgent 自动探索并生成 codeContext 的失败测试
+- [X] T019-U015 [P] [US1] 在 `execution-plane/tests/test_requirement_agent.py` 添加 RequirementAgent 在无 repository 时退化为纯需求文本分析的失败测试
 
 ### 用户故事 1 的实施
 
-- [ ] T019-U016 [US1] 在 `execution-plane/src/context/repository_context.py` 实现 list_repository 工具，返回候选文件、语言提示、优先级提示和 skipped 列表
-- [ ] T019-U017 [US1] 在 `execution-plane/src/context/repository_context.py` 实现 search_text 工具，支持关键词搜索、默认文本后缀过滤、最大结果数和结构化 match 输出
-- [ ] T019-U018 [US1] 在 `execution-plane/src/context/repository_context.py` 实现 read_file_range 工具，支持行范围读取、字节预算、二进制/超大文件跳过和中文注释说明安全边界
-- [ ] T019-U019 [US1] 在 `execution-plane/src/agents/requirement_agent.py` 实现“规划 -> 文件发现 -> 搜索 -> 范围读取 -> 证据归纳 -> 充分性评估”的有限轮次循环，并添加中文注释解释每个阶段为什么存在
-- [ ] T019-U020 [US1] 在 `execution-plane/src/agents/requirement_agent.py` 将 CodeContextSummary 注入需求分析提示词，并保证 PRD 输出能引用 evidence 和 openQuestions
-- [ ] T019-U021 [US1] 在 `execution-plane/src/workers/activities.py` 确保 analyzeRequirement 活动返回的阶段产物包含 `codeContext` 字段
-- [ ] T019-U022 [US1] 使用 `execution-plane/tests/test_context_tools.py` 和 `execution-plane/tests/test_requirement_agent.py` 验证用户故事 1 测试通过
+- [X] T019-U016 [US1] 在 `execution-plane/src/context/repository_context.py` 实现 list_repository 工具，返回候选文件、语言提示、优先级提示和 skipped 列表
+- [X] T019-U017 [US1] 在 `execution-plane/src/context/repository_context.py` 实现 search_text 工具，支持关键词搜索、默认文本后缀过滤、最大结果数和结构化 match 输出
+- [X] T019-U018 [US1] 在 `execution-plane/src/context/repository_context.py` 实现 read_file_range 工具，支持行范围读取、字节预算、二进制/超大文件跳过和中文注释说明安全边界
+- [X] T019-U019 [US1] 在 `execution-plane/src/agents/requirement_agent.py` 实现“规划 -> 文件发现 -> 搜索 -> 范围读取 -> 证据归纳 -> 充分性评估”的有限轮次循环，并添加中文注释解释每个阶段为什么存在
+- [X] T019-U020 [US1] 在 `execution-plane/src/agents/requirement_agent.py` 将 CodeContextSummary 注入需求分析提示词，并保证 PRD 输出能引用 evidence 和 openQuestions
+- [X] T019-U021 [US1] 在 `execution-plane/src/workers/activities.py` 确保 analyzeRequirement 活动返回的阶段产物包含 `codeContext` 字段
+- [X] T019-U022 [US1] 使用 `execution-plane/tests/test_context_tools.py` 和 `execution-plane/tests/test_requirement_agent.py` 验证用户故事 1 测试通过
 
 **检查点**: MVP 可演示。用户无需填写 include/exclude 即可获得基于代码证据的需求分析。
 

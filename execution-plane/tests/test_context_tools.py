@@ -21,8 +21,10 @@ from src.context import (
     RepositoryContext,
     SkippedFile,
     build_context_pack,
+    list_repository,
     list_files,
     read_file,
+    read_file_range,
     search_text,
 )
 
@@ -38,6 +40,10 @@ class RepositoryContextToolsTest(unittest.TestCase):
             yield str(repo_dir)
         finally:
             rmtree(repo_dir, ignore_errors=True)
+
+    @property
+    def progressive_fixture_root(self) -> Path:
+        return Path(__file__).resolve().parent / "fixtures" / "progressive_repo"
 
     def test_repository_exploration_request_defaults_and_budget(self):
         with self.temporary_repository() as repo_dir:
@@ -119,6 +125,60 @@ class RepositoryContextToolsTest(unittest.TestCase):
             self.assertEqual(step.action_type, "PLAN")
             self.assertEqual(summary.evidence[0].supports, ("健康检查",))
             self.assertEqual(session.status, "PLANNED")
+
+    def test_list_repository_skips_default_excluded_directories_and_returns_candidates(self):
+        request = RepositoryExplorationRequest.from_mapping(
+            {"rootPath": str(self.progressive_fixture_root)}
+        )
+
+        listing = list_repository(request)
+        candidate_paths = {file.path for file in listing.files}
+        skipped_paths = {item.path for item in listing.skipped}
+
+        self.assertIn("src/health_service.py", candidate_paths)
+        self.assertIn("src/temporal_worker.py", candidate_paths)
+        self.assertNotIn("node_modules/ignored.js", candidate_paths)
+        self.assertNotIn("logs/runtime.log", candidate_paths)
+        self.assertIn("node_modules", skipped_paths)
+        self.assertIn("logs", skipped_paths)
+        self.assertTrue(
+            any(file.language == "python" and file.priority_hint for file in listing.files)
+        )
+
+    def test_search_text_returns_structured_matches_for_progressive_request(self):
+        request = RepositoryExplorationRequest.from_mapping(
+            {"rootPath": str(self.progressive_fixture_root), "maxSearchResults": 5}
+        )
+
+        matches = search_text(request, "Temporal worker")
+
+        self.assertTrue(matches)
+        self.assertLessEqual(len(matches), 5)
+        self.assertTrue(any(match.path == "src/temporal_worker.py" for match in matches))
+        self.assertTrue(all(match.line_number > 0 for match in matches))
+        self.assertTrue(all(match.preview for match in matches))
+        self.assertTrue(all(hasattr(match, "score_hint") for match in matches))
+
+    def test_read_file_range_returns_bytes_and_truncation_metadata(self):
+        request = RepositoryExplorationRequest.from_mapping(
+            {"rootPath": str(self.progressive_fixture_root)}
+        )
+
+        result = read_file_range(
+            request,
+            "src/health_service.py",
+            line_start=1,
+            line_end=20,
+            max_bytes=120,
+        )
+
+        self.assertEqual(result.path, "src/health_service.py")
+        self.assertEqual(result.line_start, 1)
+        self.assertEqual(result.line_end, 20)
+        self.assertGreater(result.bytes_read, 0)
+        self.assertLessEqual(result.bytes_read, 120)
+        self.assertTrue(result.truncated)
+        self.assertIn("健康检查", result.content)
 
     def test_lists_reads_searches_and_packs_temporary_repository(self):
         with self.temporary_repository() as repo_dir:

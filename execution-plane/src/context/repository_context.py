@@ -263,10 +263,37 @@ class FileMatch:
 
 
 @dataclass(frozen=True)
+class RepositoryFile:
+    path: str
+    size_bytes: int
+    language: str
+    priority_hint: str = ""
+
+
+@dataclass(frozen=True)
+class RepositoryListing:
+    files: tuple[RepositoryFile, ...]
+    skipped: tuple[SkippedFile, ...] = ()
+
+
+@dataclass(frozen=True)
 class SearchMatch:
     path: str
     line_number: int
     line: str
+    preview: str = ""
+    truncated: bool = False
+    score_hint: float = 0.0
+
+
+@dataclass(frozen=True)
+class FileRangeRead:
+    path: str
+    line_start: int
+    line_end: int
+    content: str
+    bytes_read: int
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -307,6 +334,42 @@ def list_files(context: RepositoryContext) -> list[FileMatch]:
     return sorted(discovered.values(), key=lambda file: file.path)[: context.max_files]
 
 
+def list_repository(request: RepositoryExplorationRequest) -> RepositoryListing:
+    """渐进探索的文件发现工具。
+
+    这个函数只负责确定性地列出可候选文件和跳过原因，不做需求判断。
+    RequirementAgent 后续会根据需求文本和搜索结果再决定读取哪些文件。
+    """
+
+    root = request.resolved_root
+    discovered: dict[str, RepositoryFile] = {}
+    skipped: dict[str, SkippedFile] = {}
+
+    for include_path in request.effective_include_paths:
+        resolved = _resolve_inside_root(root, include_path)
+        _collect_repository_files(root, resolved, request, discovered, skipped)
+        if len(discovered) >= request.budget.max_files:
+            break
+
+    for target_file in request.target_files:
+        resolved = _resolve_inside_root(root, target_file)
+        if resolved.is_file():
+            relative_path = _relative_path(root, resolved)
+            if _is_excluded(relative_path, request.exclude_paths):
+                skipped[relative_path] = SkippedFile(
+                    path=relative_path,
+                    reason="EXCLUDED",
+                    detail="target file is excluded by repository exploration rules",
+                )
+            else:
+                discovered[relative_path] = _repository_file(root, resolved, "target")
+
+    return RepositoryListing(
+        files=tuple(sorted(discovered.values(), key=lambda file: file.path)[: request.budget.max_files]),
+        skipped=tuple(sorted(skipped.values(), key=lambda item: item.path)),
+    )
+
+
 def read_file(
     context: RepositoryContext,
     path: str,
@@ -335,7 +398,7 @@ def read_file(
 
 
 def search_text(
-    context: RepositoryContext,
+    context: RepositoryContext | RepositoryExplorationRequest,
     query: str,
     *,
     max_results: int = 20,
@@ -344,6 +407,35 @@ def search_text(
     normalized_query = query.casefold()
     if not normalized_query:
         return []
+
+    if isinstance(context, RepositoryExplorationRequest):
+        max_results = min(max_results, context.budget.max_search_results)
+        matches: list[SearchMatch] = []
+        for file in list_repository(context).files:
+            try:
+                read_result = read_file_range(
+                    context,
+                    file.path,
+                    max_bytes=min(context.budget.max_bytes, 64_000),
+                )
+            except (OSError, UnicodeError, ValueError):
+                continue
+            for line_number, line in enumerate(read_result.content.splitlines(), start=1):
+                if normalized_query in line.casefold():
+                    preview = line.rstrip()
+                    matches.append(
+                        SearchMatch(
+                            path=file.path,
+                            line_number=line_number,
+                            line=preview,
+                            preview=preview,
+                            truncated=read_result.truncated,
+                            score_hint=_score_match(file.path, preview, normalized_query),
+                        )
+                    )
+                    if len(matches) >= max_results:
+                        return matches
+        return matches
 
     matches: list[SearchMatch] = []
     for file in list_files(context):
@@ -354,6 +446,52 @@ def search_text(
                 if len(matches) >= max_results:
                     return matches
     return matches
+
+
+def read_file_range(
+    request: RepositoryExplorationRequest,
+    path: str,
+    *,
+    line_start: int = 1,
+    line_end: int | None = None,
+    max_bytes: int | None = None,
+) -> FileRangeRead:
+    """渐进探索的范围读取工具。
+
+    范围读取是 Agent 的源码访问边界：它必须先做 root_path 校验、默认排除校验、
+    文件类型校验和字节预算截断，然后才返回短片段。这样即使 LLM 决定继续探索，
+    也只能在受控工具能力内逐步披露代码。
+    """
+
+    root = request.resolved_root
+    resolved = _resolve_inside_root(root, path)
+    relative_path = _relative_path(root, resolved)
+    if _is_excluded(relative_path, request.exclude_paths):
+        raise ValueError(f"Path is excluded by repository exploration request: {path}")
+    if not resolved.is_file():
+        raise FileNotFoundError(path)
+    if _looks_binary(resolved):
+        raise ValueError(f"Binary file is not readable by repository exploration: {path}")
+
+    content = resolved.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines()
+    start = max(line_start, 1)
+    end = max(line_end or len(lines), start)
+    selected = "\n".join(lines[start - 1 : end])
+    encoded = selected.encode("utf-8")
+    limit = max_bytes or request.budget.max_bytes
+    truncated = len(encoded) > limit
+    if truncated:
+        selected = encoded[:limit].decode("utf-8", errors="ignore")
+        encoded = selected.encode("utf-8")
+    return FileRangeRead(
+        path=relative_path,
+        line_start=start,
+        line_end=end,
+        content=selected,
+        bytes_read=len(encoded),
+        truncated=truncated,
+    )
 
 
 def build_context_pack(
@@ -453,6 +591,45 @@ def _collect_files(
         _collect_files(root, child, context, discovered)
 
 
+def _collect_repository_files(
+    root: Path,
+    current: Path,
+    request: RepositoryExplorationRequest,
+    discovered: dict[str, RepositoryFile],
+    skipped: dict[str, SkippedFile],
+) -> None:
+    if len(discovered) >= request.budget.max_files or not current.exists():
+        return
+
+    relative_path = _relative_path(root, current)
+    if _is_excluded(relative_path, request.exclude_paths):
+        skipped[relative_path] = SkippedFile(
+            path=relative_path,
+            reason="EXCLUDED",
+            detail="default or user exclude rule matched",
+        )
+        return
+
+    if current.is_file():
+        if _looks_binary(current):
+            skipped[relative_path] = SkippedFile(
+                path=relative_path,
+                reason="BINARY",
+                detail="binary-like file skipped during repository listing",
+            )
+            return
+        discovered[relative_path] = _repository_file(root, current)
+        return
+
+    if not current.is_dir():
+        return
+
+    for child in sorted(current.iterdir(), key=lambda item: item.name.casefold()):
+        if len(discovered) >= request.budget.max_files:
+            return
+        _collect_repository_files(root, child, request, discovered, skipped)
+
+
 def _is_excluded(relative_path: str, exclude_paths: Iterable[str]) -> bool:
     normalized = _normalize_path(relative_path)
     for exclude_path in _combined_exclude_paths(exclude_paths):
@@ -505,3 +682,56 @@ def _positive_int(value: Any, default: int, field_name: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{field_name} must be a positive integer")
     return parsed
+
+
+def _repository_file(root: Path, path: Path, priority_hint: str = "") -> RepositoryFile:
+    return RepositoryFile(
+        path=_relative_path(root, path),
+        size_bytes=path.stat().st_size,
+        language=_language_for(path),
+        priority_hint=priority_hint or _priority_hint_for(path),
+    )
+
+
+def _language_for(path: Path) -> str:
+    suffix = path.suffix.casefold()
+    return {
+        ".py": "python",
+        ".java": "java",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".js": "javascript",
+        ".json": "json",
+        ".md": "markdown",
+        ".yml": "yaml",
+        ".yaml": "yaml",
+    }.get(suffix, suffix.lstrip(".") or "text")
+
+
+def _priority_hint_for(path: Path) -> str:
+    normalized = path.as_posix().casefold()
+    if "test" in normalized:
+        return "test"
+    if any(token in normalized for token in ("agent", "worker", "service", "controller")):
+        return "runtime"
+    if path.suffix.casefold() in (".md", ".yml", ".yaml", ".json"):
+        return "metadata"
+    return "source"
+
+
+def _score_match(path: str, line: str, normalized_query: str) -> float:
+    score = 0.5
+    if normalized_query in path.casefold():
+        score += 0.3
+    if normalized_query in line.casefold():
+        score += 0.2
+    return min(score, 1.0)
+
+
+def _looks_binary(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            sample = handle.read(2048)
+    except OSError:
+        return True
+    return b"\x00" in sample

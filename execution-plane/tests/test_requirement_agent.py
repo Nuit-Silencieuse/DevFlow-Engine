@@ -149,6 +149,97 @@ class RequirementAgentTest(unittest.TestCase):
             inspected_files,
         )
 
+    def test_root_path_only_repository_context_progressively_explores_fixture(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        fixture_root = Path(__file__).resolve().parent / "fixtures" / "progressive_repo"
+        agent = RequirementAgent(
+            llm_client=fake_llm_client(
+                {
+                    "summary": "增加测试环境健康检查页面",
+                    "problem_statement": "用户需要看到控制平面和执行平面 worker 是否可用。",
+                    "user_stories": [
+                        {
+                            "role": "测试人员",
+                            "goal": "查看 health check 页面",
+                            "benefit": "确认 Temporal worker 正在轮询任务队列",
+                        }
+                    ],
+                    "acceptance_criteria": [
+                        {
+                            "id": "AC-001",
+                            "description": "页面展示控制平面状态",
+                            "verification": "检查 codeContext 中存在 health_service 证据",
+                        },
+                        {
+                            "id": "AC-002",
+                            "description": "页面展示 Temporal worker 状态",
+                            "verification": "检查 codeContext 中存在 temporal_worker 证据",
+                        },
+                    ],
+                }
+            )
+        )
+
+        result = agent.run(
+            {
+                "original_requirement": (
+                    "Build a health check page for control plane, execution plane, "
+                    "and Temporal worker status."
+                ),
+                "repository_context": {"rootPath": str(fixture_root)},
+            }
+        )
+
+        code_context = result["code_context"]
+        self.assertEqual(code_context["status"], "COMPLETE")
+        self.assertIn("src/health_service.py", code_context["inspected_files"])
+        self.assertIn("src/temporal_worker.py", code_context["inspected_files"])
+        self.assertNotIn("node_modules/ignored.js", code_context["inspected_files"])
+        self.assertNotIn("logs/runtime.log", code_context["inspected_files"])
+        self.assertTrue(code_context["search_queries"])
+        self.assertTrue(code_context["evidence"])
+        self.assertGreater(code_context["budget_usage"]["files_read"], 0)
+        self.assertIn("codeContext", result)
+        self.assertEqual(result["codeContext"]["inspectedFiles"], code_context["inspected_files"])
+        self.assertEqual(
+            result["structured_prd"]["evidence"]["inspected_files"],
+            code_context["inspected_files"],
+        )
+
+    def test_without_repository_context_degrades_to_requirement_only_analysis(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        agent = RequirementAgent(
+            llm_client=fake_llm_client(
+                {
+                    "summary": "增加测试环境健康检查页面",
+                    "user_stories": [
+                        {"role": "测试人员", "goal": "查看状态", "benefit": "定位环境问题"}
+                    ],
+                    "acceptance_criteria": [
+                        {
+                            "id": "AC-001",
+                            "description": "输出需求分析",
+                            "verification": "检查 structured_prd",
+                        },
+                        {
+                            "id": "AC-002",
+                            "description": "说明未使用代码上下文",
+                            "verification": "检查 code_context.notes",
+                        },
+                    ],
+                }
+            )
+        )
+
+        result = agent.run({"original_requirement": "增加测试环境健康检查页面"})
+
+        self.assertEqual(result["code_context"]["status"], "SKIPPED")
+        self.assertEqual(result["code_context"]["inspected_files"], [])
+        self.assertIn("未提供 repository_context", result["code_context"]["notes"][0])
+        self.assertEqual(result["structured_prd"]["source"], "requirement_agent")
+
     def test_trace_file_contains_requirement_agent_intermediate_artifacts(self):
         from src.agents.requirement_agent import RequirementAgent
 
@@ -218,6 +309,7 @@ class RequirementAgentTest(unittest.TestCase):
                         "source": "requirement_agent",
                     },
                     "code_context": {"inspected_files": ["README.md"]},
+                    "codeContext": {"inspectedFiles": ["README.md"]},
                     "current_step": "REQUIREMENT_ANALYSIS",
                     "error_logs": [],
                 }
@@ -237,6 +329,7 @@ class RequirementAgentTest(unittest.TestCase):
 
         self.assertEqual(result["outputPayload"]["structured_prd"]["source"], "requirement_agent")
         self.assertEqual(result["outputPayload"]["code_context"]["inspected_files"], ["README.md"])
+        self.assertEqual(result["outputPayload"]["codeContext"]["inspectedFiles"], ["README.md"])
 
 
 class RequirementAgentEffectTest(unittest.TestCase):

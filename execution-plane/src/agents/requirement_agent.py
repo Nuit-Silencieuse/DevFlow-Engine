@@ -6,7 +6,15 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from src.context import RepositoryContext, build_context_pack
+from src.context import (
+    BudgetUsage,
+    EvidenceItem,
+    ExplorationStep,
+    RepositoryExplorationRequest,
+    list_repository,
+    read_file_range,
+    search_text,
+)
 from src.llm import LlmClient, LlmMessage, LlmRequest
 
 if TYPE_CHECKING:
@@ -74,36 +82,46 @@ class RequirementAgent:
         if not repository_payload:
             return {
                 "context_pack": {
+                    "status": "SKIPPED",
                     "root_path": "",
                     "files": [],
                     "inspected_files": existing_code_context.get("inspected_files", []),
                     "search_queries": existing_code_context.get("search_queries", []),
+                    "candidate_files": [],
+                    "evidence": [],
+                    "skipped_paths": [],
+                    "budget_usage": {
+                        "rounds_used": 0,
+                        "files_read": 0,
+                        "bytes_read": 0,
+                        "searches_used": 0,
+                    },
+                    "confidence": 0.0,
+                    "open_questions": ["未提供 repository_context，无法从代码库确认实现约束。"],
                     "total_bytes": 0,
                     "notes": ["未提供 repository_context，需求分析仅基于用户输入。"],
                 }
             }
 
-        # Requirement Agent 只需要了解项目背景，不应该像代码生成 Agent 那样深读
-        # 整个仓库。这里复用 T019 的预算限制，同时优先 targetFiles，避免把无关
-        # 构建产物塞进 LLM 上下文。
-        context = RepositoryContext.from_mapping(repository_payload)
-        if context is None:
-            return {"context_pack": {"files": [], "inspected_files": [], "search_queries": []}}
+        request = RepositoryExplorationRequest.from_mapping(repository_payload)
+        if request is None:
+            return {"context_pack": {"status": "SKIPPED", "files": [], "inspected_files": [], "search_queries": []}}
 
-        queries = extract_search_queries(state.get("requirement_text", ""))
-        pack = build_context_pack(
-            context,
-            paths=context.target_files,
-            search_queries=queries,
+        context_pack = progressively_collect_context(
+            request,
+            state.get("requirement_text", ""),
         )
-        context_pack = context_pack_to_mapping(pack)
         self.llm_client.trace_recorder.record(
             "requirement_agent.context_pack",
             {
                 "root_path": context_pack.get("root_path"),
+                "status": context_pack.get("status"),
                 "inspected_files": context_pack.get("inspected_files"),
                 "search_queries": context_pack.get("search_queries"),
                 "total_bytes": context_pack.get("total_bytes"),
+                "candidate_files": context_pack.get("candidate_files"),
+                "evidence": context_pack.get("evidence"),
+                "budget_usage": context_pack.get("budget_usage"),
                 "files": [
                     {
                         "path": file.get("path"),
@@ -195,16 +213,26 @@ class RequirementAgent:
         prd = state.get("draft_prd") or {}
         context_pack = state.get("context_pack") or {}
         code_context = {
+            "status": context_pack.get("status", "COMPLETE" if context_pack.get("files") else "SKIPPED"),
             "root_path": context_pack.get("root_path", ""),
             "inspected_files": list(context_pack.get("inspected_files", [])),
             "search_queries": list(context_pack.get("search_queries", [])),
+            "candidate_files": list(context_pack.get("candidate_files", [])),
+            "evidence": list(context_pack.get("evidence", [])),
+            "skipped_paths": list(context_pack.get("skipped_paths", [])),
+            "budget_usage": dict(context_pack.get("budget_usage") or {}),
+            "confidence": context_pack.get("confidence", 0.0),
+            "open_questions": list(context_pack.get("open_questions", [])),
+            "notes": list(context_pack.get("notes", [])),
             "total_bytes": context_pack.get("total_bytes", 0),
             "source": "requirement_agent",
         }
+        code_context_camel = code_context_to_camel(code_context)
         return {
             "result": {
                 "structured_prd": prd,
                 "code_context": code_context,
+                "codeContext": code_context_camel,
                 "current_step": REQUIREMENT_ANALYSIS,
                 "error_logs": list(state.get("errors", [])),
             }
@@ -234,7 +262,12 @@ class RequirementAgent:
                     },
                     "source": "requirement_agent",
                 },
-                "code_context": {"inspected_files": [], "search_queries": [], "source": "requirement_agent"},
+                "code_context": {
+                    "status": "SKIPPED",
+                    "inspected_files": [],
+                    "search_queries": [],
+                    "source": "requirement_agent",
+                },
                 "current_step": REQUIREMENT_ANALYSIS,
                 "error_logs": errors,
             }
@@ -438,16 +471,155 @@ def normalize_evidence(value: Any, context_pack: dict[str, Any]) -> dict[str, li
     }
 
 
-def context_pack_to_mapping(pack: Any) -> dict[str, Any]:
+def progressively_collect_context(
+    request: RepositoryExplorationRequest,
+    requirement_text: str,
+) -> dict[str, Any]:
+    """用短循环自动披露代码上下文。
+
+    US1 只实现一个保守的有限循环：先列出候选文件，再基于需求关键词搜索，
+    最后读取少量高相关文件片段。这里的状态转移由 RequirementAgent 决定，
+    Temporal 只负责外层工作流编排，不承载这些细粒度探索判断。
+    """
+
+    steps: list[ExplorationStep] = []
+    steps.append(
+        ExplorationStep(
+            step_index=1,
+            round_index=1,
+            action_type="PLAN",
+            reason="根据需求文本生成初始搜索词，并准备扫描仓库轮廓。",
+            result_summary="plan progressive repository exploration",
+        )
+    )
+
+    listing = list_repository(request)
+    candidate_files = [file.path for file in listing.files]
+    skipped_paths = [
+        {"path": item.path, "reason": item.reason, "detail": item.detail}
+        for item in listing.skipped
+    ]
+    steps.append(
+        ExplorationStep(
+            step_index=2,
+            round_index=1,
+            action_type="LIST_FILES",
+            reason="获取仓库中可被 Agent 进一步搜索和读取的候选文件。",
+            result_summary=f"found {len(candidate_files)} candidate files",
+            selected_files=tuple(candidate_files[:10]),
+        )
+    )
+
+    queries = extract_search_queries(requirement_text)
+    matched_paths: list[str] = []
+    searches_used = 0
+    for query in queries[: request.budget.max_searches]:
+        matches = search_text(request, query, max_results=request.budget.max_search_results)
+        searches_used += 1
+        matched_paths.extend(match.path for match in matches)
+        steps.append(
+            ExplorationStep(
+                step_index=len(steps) + 1,
+                round_index=1,
+                action_type="SEARCH_TEXT",
+                reason=f"用需求关键词 {query!r} 定位相关模块。",
+                input={"query": query},
+                result_summary=f"matched {len(matches)} lines",
+                selected_files=tuple(dict.fromkeys(match.path for match in matches)),
+            )
+        )
+
+    selected_paths = _ordered_unique(
+        [
+            *request.target_files,
+            *matched_paths,
+            *candidate_files,
+        ]
+    )[: request.budget.max_files]
+
+    files: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    inspected_files: list[str] = []
+    total_bytes = 0
+
+    for path in selected_paths:
+        remaining = request.budget.max_bytes - total_bytes
+        if remaining <= 0:
+            break
+        try:
+            read_result = read_file_range(
+                request,
+                path,
+                line_start=1,
+                line_end=80,
+                max_bytes=min(remaining, 16_000),
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            skipped_paths.append({"path": path, "reason": "READ_ERROR", "detail": str(exc)})
+            continue
+
+        files.append(
+            {
+                "path": read_result.path,
+                "content": read_result.content,
+                "truncated": read_result.truncated,
+            }
+        )
+        inspected_files.append(read_result.path)
+        total_bytes += read_result.bytes_read
+        evidence_item = EvidenceItem(
+            file_path=read_result.path,
+            line_start=read_result.line_start,
+            line_end=read_result.line_end,
+            excerpt=read_result.content[:500],
+            relevance_reason="该文件由需求关键词搜索或候选文件优先级选中。",
+            supports=tuple(queries[:3]),
+        )
+        evidence.append(evidence_item_to_mapping(evidence_item))
+        steps.append(
+            ExplorationStep(
+                step_index=len(steps) + 1,
+                round_index=1,
+                action_type="READ_FILE",
+                reason="读取高相关候选文件片段，形成需求分析证据。",
+                input={"path": read_result.path, "lineStart": read_result.line_start, "lineEnd": read_result.line_end},
+                result_summary=f"read {read_result.bytes_read} bytes",
+                selected_files=(read_result.path,),
+            )
+        )
+
+    confidence = 0.78 if evidence else 0.35
+    open_questions = [] if evidence else ["未能从代码库中找到足够证据，请补充目标文件或更明确的业务关键词。"]
+    budget_usage = BudgetUsage(
+        rounds_used=1,
+        files_read=len(inspected_files),
+        bytes_read=total_bytes,
+        searches_used=searches_used,
+    )
+    steps.append(
+        ExplorationStep(
+            step_index=len(steps) + 1,
+            round_index=1,
+            action_type="EVALUATE",
+            reason="评估当前证据是否足够支撑需求分析。",
+            result_summary=f"confidence={confidence}",
+        )
+    )
+
     return {
-        "root_path": pack.root_path,
-        "files": [
-            {"path": file.path, "content": file.content, "truncated": file.truncated}
-            for file in pack.files
-        ],
-        "inspected_files": list(pack.inspected_files),
-        "search_queries": list(pack.search_queries),
-        "total_bytes": pack.total_bytes,
+        "status": "COMPLETE" if evidence else "DEGRADED",
+        "root_path": str(request.resolved_root),
+        "files": files,
+        "inspected_files": inspected_files,
+        "search_queries": list(queries),
+        "candidate_files": candidate_files,
+        "evidence": evidence,
+        "skipped_paths": skipped_paths,
+        "budget_usage": budget_usage_to_mapping(budget_usage),
+        "confidence": confidence,
+        "open_questions": open_questions,
+        "exploration_trace": [exploration_step_to_mapping(step) for step in steps],
+        "total_bytes": total_bytes,
         "notes": [],
     }
 
@@ -469,13 +641,20 @@ def summarize_context_for_prompt(context_pack: dict[str, Any]) -> dict[str, Any]
         "root_path": context_pack.get("root_path", ""),
         "inspected_files": context_pack.get("inspected_files", []),
         "search_queries": context_pack.get("search_queries", []),
+        "evidence": context_pack.get("evidence", []),
+        "open_questions": context_pack.get("open_questions", []),
         "files": files,
     }
 
 
 def extract_search_queries(requirement_text: str) -> tuple[str, ...]:
     ascii_words = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", requirement_text)
-    queries = [word for word in ascii_words if len(word) >= 4][:3]
+    stop_words = {"with", "from", "that", "this", "and", "for", "the", "page", "build"}
+    queries = [
+        word
+        for word in ascii_words
+        if len(word) >= 4 and word.casefold() not in stop_words
+    ][:8]
     return tuple(dict.fromkeys(queries))
 
 
@@ -520,6 +699,86 @@ def empty_non_functional_requirements() -> dict[str, list[str]]:
 
 def empty_evidence() -> dict[str, list[str]]:
     return {"inspected_files": [], "search_queries": [], "notes": []}
+
+
+def evidence_item_to_mapping(item: EvidenceItem) -> dict[str, Any]:
+    return {
+        "filePath": item.file_path,
+        "file_path": item.file_path,
+        "lineStart": item.line_start,
+        "line_start": item.line_start,
+        "lineEnd": item.line_end,
+        "line_end": item.line_end,
+        "symbolName": item.symbol_name,
+        "symbol_name": item.symbol_name,
+        "excerpt": item.excerpt,
+        "relevanceReason": item.relevance_reason,
+        "relevance_reason": item.relevance_reason,
+        "supports": list(item.supports),
+    }
+
+
+def budget_usage_to_mapping(usage: BudgetUsage) -> dict[str, int]:
+    return {
+        "rounds_used": usage.rounds_used,
+        "roundsUsed": usage.rounds_used,
+        "files_read": usage.files_read,
+        "filesRead": usage.files_read,
+        "bytes_read": usage.bytes_read,
+        "bytesRead": usage.bytes_read,
+        "searches_used": usage.searches_used,
+        "searchesUsed": usage.searches_used,
+    }
+
+
+def exploration_step_to_mapping(step: ExplorationStep) -> dict[str, Any]:
+    return {
+        "stepIndex": step.step_index,
+        "step_index": step.step_index,
+        "roundIndex": step.round_index,
+        "round_index": step.round_index,
+        "actionType": step.action_type,
+        "action_type": step.action_type,
+        "reason": step.reason,
+        "input": dict(step.input),
+        "resultSummary": step.result_summary,
+        "result_summary": step.result_summary,
+        "selectedFiles": list(step.selected_files),
+        "selected_files": list(step.selected_files),
+        "error": step.error,
+    }
+
+
+def code_context_to_camel(code_context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": code_context.get("status"),
+        "rootPath": code_context.get("root_path", ""),
+        "inspectedFiles": code_context.get("inspected_files", []),
+        "searchQueries": code_context.get("search_queries", []),
+        "candidateFiles": code_context.get("candidate_files", []),
+        "evidence": code_context.get("evidence", []),
+        "skippedPaths": code_context.get("skipped_paths", []),
+        "budgetUsage": {
+            "roundsUsed": code_context.get("budget_usage", {}).get("rounds_used", 0),
+            "filesRead": code_context.get("budget_usage", {}).get("files_read", 0),
+            "bytesRead": code_context.get("budget_usage", {}).get("bytes_read", 0),
+            "searchesUsed": code_context.get("budget_usage", {}).get("searches_used", 0),
+        },
+        "confidence": code_context.get("confidence", 0.0),
+        "openQuestions": code_context.get("open_questions", []),
+        "notes": code_context.get("notes", []),
+    }
+
+
+def _ordered_unique(paths: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        normalized = str(path).replace("\\", "/").strip().strip("/")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return result
 
 
 REQUIREMENT_PRD_SCHEMA = {
