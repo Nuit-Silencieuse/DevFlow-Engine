@@ -701,6 +701,28 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertIn("llm.response", trace_content)
         self.assertIn("requirement_agent.validation_report", trace_content)
 
+    def test_requirement_prompt_keeps_language_and_requests_richer_output(self):
+        from src.agents.requirement_agent import build_messages
+
+        messages = build_messages(
+            {
+                "requirement_text": "完成 T024，实现负责代码生成的 Agent 节点逻辑。",
+                "feedback_text": "",
+                "analysis_plan": {},
+                "context_pack": {},
+            }
+        )
+
+        user_payload = json.loads(messages[1].content)
+        serialized_messages = json.dumps(
+            [{"role": message.role, "content": message.content} for message in messages],
+            ensure_ascii=False,
+        )
+
+        self.assertEqual(user_payload["response_language"], "zh-Hans")
+        self.assertIn("user_stories 默认至少 3 条", serialized_messages)
+        self.assertIn("acceptance_criteria 默认至少 5 条", serialized_messages)
+
     def test_flow_node_invokes_requirement_agent(self):
         from src.graph.flow import analyze_requirement_node
 

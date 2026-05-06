@@ -13,6 +13,8 @@
 5. Agent 失败时应写入 `error_logs`，并返回可诊断的失败上下文。
 6. 所有真实业务 Agent 统一通过 T021 的 `LlmClient` 调用模型，不直接依赖某个 Provider SDK。
 7. 测试中通过可控 Fake Provider 或固定响应验证行为，不把规则分析器作为生产兜底路径。
+8. Agent 的自然语言输出必须跟随用户需求语言；中文需求默认输出简体中文，英文需求默认输出英文。
+9. 面向人工审批和后续 Agent 消费的阶段产物必须足够详细，不能只返回少量短句或概括性条目。
 
 ## 状态字段归属
 
@@ -125,6 +127,8 @@
 验收测试建议:
 
 - 输入一段登录注册需求，输出至少包含 summary、user_stories、acceptance_criteria。
+- 中文输入时，`summary`、`user_stories`、`acceptance_criteria` 等自然语言字段应保持中文。
+- LLM Prompt 默认要求至少 3 条用户故事、5 条验收标准、3 条边界场景，并尽量覆盖性能、安全、可靠性和兼容性要求。
 - 存在 `repository_context` 时，应记录被检查文件和搜索词。
 - 当需求为空时，写入 `error_logs` 或抛出可控异常。
 - 测试使用 Fake Provider 注入固定 LLM 响应，不依赖真实模型服务。
@@ -165,7 +169,10 @@
     {
       "name": "模块名",
       "responsibility": "职责",
-      "dependencies": []
+      "dependencies": [],
+      "key_decisions": ["关键设计决策"],
+      "implementation_notes": ["实现注意事项"],
+      "test_focus": ["测试关注点"]
     }
   ],
   "api_contracts": [],
@@ -174,9 +181,13 @@
     {
       "path": "需要修改的文件",
       "operation": "create|update",
-      "reason": "修改原因"
+      "reason": "修改原因",
+      "change_summary": "具体改动摘要",
+      "validation": "验证方式",
+      "related_modules": ["关联模块"]
     }
   ],
+  "test_strategy": [],
   "risks": [],
   "feedback": "人工反馈",
   "source": "design_agent"
@@ -224,7 +235,8 @@ validate_design invalid 且不可修复 -> fail_soft
 | `code_context` | 需求分析阶段留下的代码证据摘要，用于判断现有模块、文件计划和风险 |
 | `pipeline_context` | 跨阶段共享上下文，DesignAgent 会把 `design_doc` 追加到 `artifact_index.SYSTEM_DESIGN` |
 | `human_feedback` | 人工驳回后注入的修订意见，进入 LLM Prompt 并写入 `design_doc.feedback` |
-| `design_plan` | Agent 内部规划，记录需要生成 summary、modules、api_contracts、data_changes、file_plan、risks、open_questions |
+| `response_language` | 根据 `original_requirement`、`structured_prd` 和人工反馈推断的输出语言，中文需求为 `zh-Hans` |
+| `design_plan` | Agent 内部规划，记录需要生成 summary、modules、api_contracts、data_changes、file_plan、test_strategy、risks、open_questions，并包含最小细节要求 |
 | `validation_report` | 设计文档结构校验结果，便于调试 LLM 输出缺字段问题 |
 
 `design_doc` 输出结构：
@@ -236,7 +248,10 @@ validate_design invalid 且不可修复 -> fail_soft
     {
       "name": "模块名",
       "responsibility": "职责",
-      "dependencies": []
+      "dependencies": [],
+      "key_decisions": [],
+      "implementation_notes": [],
+      "test_focus": []
     }
   ],
   "api_contracts": [],
@@ -245,9 +260,13 @@ validate_design invalid 且不可修复 -> fail_soft
     {
       "path": "需要创建或修改的文件",
       "operation": "create|update|delete",
-      "reason": "修改原因"
+      "reason": "修改原因",
+      "change_summary": "具体改动摘要",
+      "validation": "验证方式",
+      "related_modules": []
     }
   ],
+  "test_strategy": [],
   "risks": [],
   "open_questions": [],
   "feedback": "人工反馈",
@@ -264,6 +283,9 @@ validate_design invalid 且不可修复 -> fail_soft
 - 存在 `human_feedback` 时写 warning，提示本次设计是反馈修订路径。
 - 调用 LLM 前写 warning，记录已检查文件数量和是否存在反馈，便于排查模型调用前输入是否正确。
 - 校验失败和结构修复时写 warning，输出缺失字段列表和修复尝试次数。
+- Prompt 中显式写入 `response_language`，要求模型所有自然语言字段跟随需求语言。
+- Prompt 和 schema 要求 `modules` 至少 3 项、`file_plan` 至少 4 项；文件计划必须覆盖源码、测试、文档和集成点。
+- `file_plan` 除 path、operation、reason 外，还需要 `change_summary` 和 `validation`，方便后续 CoderAgent 和人工审批理解每个文件为什么要改、如何验证。
 
 设计边界：
 
@@ -292,6 +314,75 @@ validate_design invalid 且不可修复 -> fail_soft
 - 不直接提交 Git。
 - 不直接覆盖文件，文件写入应由后续沙箱或明确的文件管理模块执行。
 - diff 必须尽量小，避免无关格式化。
+
+实现状态:
+
+T024 已新增 `CoderAgent`，并将 `flow.py` 的 `generate_code_node` 从占位文本替换为 `CoderAgent().run(state)`。
+
+子图节点顺序:
+
+```text
+prepare_input
+  -> plan_code
+  -> draft_code_patch
+  -> validate_patch
+  -> repair_patch?   # 只修复 Markdown fenced diff 等格式外壳，不编造业务 diff
+  -> finalize
+
+prepare_input invalid -> fail_soft
+validate_patch invalid 且不可修复 -> fail_soft
+```
+
+输入:
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `design_doc` | 是 | DesignAgent 输出的设计文档和文件计划 |
+| `structured_prd` | 否 | 验收标准和需求摘要，辅助生成更符合需求的 diff |
+| `code_context` | 否 | 前序阶段代码证据摘要 |
+| `pipeline_context` | 否 | 跨阶段共享上下文，CoderAgent 会追加 `CODE_GENERATION` 产物索引 |
+| `human_feedback` | 否 | 人工反馈，进入 LLM Prompt |
+
+输出:
+
+```json
+{
+  "diff_patch": "unified diff 文本",
+  "code_generation_report": {
+    "status": "GENERATED",
+    "summary": "代码生成摘要",
+    "changed_files": [
+      {
+        "path": "文件路径",
+        "operation": "create|update|delete",
+        "summary": "文件级修改摘要"
+      }
+    ],
+    "risks": [],
+    "open_questions": [],
+    "quality": {
+      "confidence": "MEDIUM",
+      "unified_diff": true,
+      "file_count": 1
+    },
+    "source": "coder_agent"
+  }
+}
+```
+
+Prompt 与校验约束:
+
+- `diff_patch` 必须是 unified diff，不使用 JSON Patch。
+- Prompt 明确禁止写文件、执行 Git、运行 shell 命令。
+- 默认只修改 `design_doc.file_plan` 指定或代码证据明确支持的文件。
+- 若缺少必要上下文，不猜测完整实现，应通过 `open_questions` 暴露阻塞点。
+- 校验要求 diff 非空且具备 unified diff 结构标记；如果 LLM 返回 Markdown fenced block，仅剥离外壳。
+
+前端展示:
+
+- 流水线控制台在 `CODE_GENERATION` 阶段只选择 `diff_patch` 作为核心产物。
+- 前端会解析 `diff --git` / `+++ b/...` 文件头，展示修改文件数、新增行、删除行和每个文件的 diff 片段。
+- 原始 diff 以未转义文本放在折叠区中，便于复制、审查或交给后续沙箱处理。
 
 ## T025: Test Agent
 

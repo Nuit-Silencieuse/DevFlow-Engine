@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -25,6 +26,7 @@ class DesignAgentState(TypedDict, total=False):
     code_context: dict[str, Any]
     pipeline_context: dict[str, Any]
     feedback_text: str
+    response_language: str
     design_plan: dict[str, Any]
     draft_design: dict[str, Any]
     validation_report: dict[str, Any]
@@ -62,6 +64,15 @@ class DesignAgent:
         code_context = dict(devflow_state.get("code_context") or {})
         pipeline_context = normalize_pipeline_context(devflow_state.get("pipeline_context"))
         feedback_text = normalize_text(devflow_state.get("human_feedback", ""))
+        response_language = infer_response_language(
+            " ".join(
+                [
+                    str(devflow_state.get("original_requirement", "")),
+                    json.dumps(structured_prd, ensure_ascii=False),
+                    feedback_text,
+                ]
+            )
+        )
         errors = list(state.get("errors", []))
 
         if not structured_prd:
@@ -84,6 +95,7 @@ class DesignAgent:
             "code_context": code_context,
             "pipeline_context": pipeline_context,
             "feedback_text": feedback_text,
+            "response_language": response_language,
             "errors": errors,
         }
 
@@ -97,12 +109,34 @@ class DesignAgent:
                 "api_contracts",
                 "data_changes",
                 "file_plan",
+                "test_strategy",
                 "risks",
                 "open_questions",
             ],
             "strategy": "prd_and_evidence_driven_design",
             "has_code_context": bool(code_context.get("inspected_files")),
             "acceptance_criteria_count": len(structured_prd.get("acceptance_criteria", [])),
+            "response_language": state.get("response_language", "same_as_requirement"),
+            "minimum_detail": {
+                "modules": 3,
+                "file_plan": 4,
+                "risks": 3,
+                "module_fields": [
+                    "name",
+                    "responsibility",
+                    "dependencies",
+                    "key_decisions",
+                    "implementation_notes",
+                    "test_focus",
+                ],
+                "file_plan_fields": [
+                    "path",
+                    "operation",
+                    "reason",
+                    "change_summary",
+                    "validation",
+                ],
+            },
         }
         self.llm_client.trace_recorder.record(
             "design_agent.design_plan",
@@ -266,16 +300,22 @@ def build_design_messages(state: DesignAgentState) -> tuple[LlmMessage, ...]:
         "code_context_summary": summarize_code_context(state.get("code_context") or {}),
         "human_feedback": state.get("feedback_text", ""),
         "design_plan": state.get("design_plan", {}),
+        "response_language": state.get("response_language", "same_as_requirement"),
     }
     return (
         LlmMessage(
             role="system",
             content=(
                 "你是 DevFlow Engine 的 Design Agent。只输出符合 schema 的 JSON。"
+                "输出语言必须严格遵守 user payload 中的 response_language："
+                "当 response_language 为 zh-Hans 时，summary、modules、file_plan、risks、open_questions 等所有自然语言字段都必须使用简体中文；"
+                "当 response_language 为 en 时，所有自然语言字段使用英文。"
                 "设计必须基于 structured_prd 和已提供的 code_context_summary；"
                 "不能编造未由需求、证据或人工反馈支持的实现事实。"
-                "file_plan 必须列出后续 CoderAgent 可能创建或修改的文件，"
-                "每项包含 path、operation、reason。"
+                "输出必须足够详细，不能只给一两条概括性结论。"
+                "modules 至少 3 项，每项都要说明 responsibility、dependencies、key_decisions、implementation_notes、test_focus。"
+                "file_plan 至少 4 项，必须覆盖源码、测试、文档和集成点；每项包含 path、operation、reason、change_summary、validation。"
+                "risks 至少 3 项，必须说明可观察的失败模式或调试关注点。"
             ),
         ),
         LlmMessage(
@@ -304,6 +344,7 @@ def normalize_design_doc(
         "api_contracts": normalize_named_items(draft.get("api_contracts")),
         "data_changes": normalize_named_items(draft.get("data_changes")),
         "file_plan": normalize_file_plan(draft.get("file_plan")),
+        "test_strategy": normalize_named_items(draft.get("test_strategy")),
         "risks": ensure_text_list(draft.get("risks")),
         "open_questions": open_questions,
         "feedback": feedback_text,
@@ -322,16 +363,18 @@ def validate_design_doc_shape(design_doc: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     if not design_doc.get("summary"):
         issues.append("summary is required")
-    if not design_doc.get("modules"):
-        issues.append("at least one module is required")
-    if not design_doc.get("file_plan"):
-        issues.append("at least one file_plan item is required")
+    if len(design_doc.get("modules", [])) < 3:
+        issues.append("at least three modules are required")
+    if len(design_doc.get("file_plan", [])) < 4:
+        issues.append("at least four file_plan items are required")
     for index, module in enumerate(design_doc.get("modules", []), start=1):
         if not module.get("name") or not module.get("responsibility"):
             issues.append(f"modules[{index}] requires name and responsibility")
     for index, item in enumerate(design_doc.get("file_plan", []), start=1):
         if not item.get("path") or not item.get("operation") or not item.get("reason"):
             issues.append(f"file_plan[{index}] requires path, operation and reason")
+        if not item.get("change_summary") or not item.get("validation"):
+            issues.append(f"file_plan[{index}] requires change_summary and validation")
     try:
         json.dumps(design_doc, ensure_ascii=False)
     except TypeError as exc:
@@ -354,8 +397,22 @@ def repair_structural_design_gaps(
                 "name": "待确认模块",
                 "responsibility": "根据 PRD 和人工反馈补齐模块边界",
                 "dependencies": [],
+                "key_decisions": [],
+                "implementation_notes": ["LLM 未返回模块细节，需人工复核。"],
+                "test_focus": ["补充模块级测试关注点。"],
             }
         ]
+    while len(repaired.get("modules", [])) < 3:
+        repaired["modules"].append(
+            {
+                "name": f"待确认模块 {len(repaired['modules']) + 1}",
+                "responsibility": "LLM 输出模块数量不足，需结合代码证据继续细化职责。",
+                "dependencies": [],
+                "key_decisions": [],
+                "implementation_notes": ["该项为结构性补位，不代表已确认设计事实。"],
+                "test_focus": ["人工补充该模块的测试边界。"],
+            }
+        )
     if not repaired.get("file_plan"):
         inspected_files = list(code_context.get("inspected_files", []))
         path = inspected_files[0] if inspected_files else "待确认文件"
@@ -364,8 +421,20 @@ def repair_structural_design_gaps(
                 "path": path,
                 "operation": "update",
                 "reason": "LLM 未返回完整 file_plan，已保留为人工复核项",
+                "change_summary": "需要继续拆分具体改动。",
+                "validation": "人工检查该文件是否确实需要修改。",
             }
         ]
+    while len(repaired.get("file_plan", [])) < 4:
+        repaired["file_plan"].append(
+            {
+                "path": "待确认文件",
+                "operation": "update",
+                "reason": "LLM 输出文件计划数量不足，需继续根据设计和代码证据补齐。",
+                "change_summary": "该项为结构性补位，不代表已确认文件改动。",
+                "validation": "人工复核后再交给 CoderAgent。",
+            }
+        )
     repaired["open_questions"] = [
         *ensure_text_list(repaired.get("open_questions")),
         "LLM 未返回完整设计结构，已进行结构性补全；请人工复核模块边界和文件计划。",
@@ -388,6 +457,7 @@ def diagnostic_design_doc(
         "api_contracts": [],
         "data_changes": [],
         "file_plan": [],
+        "test_strategy": [],
         "risks": ["SYSTEM_DESIGN 阶段输入不完整，后续代码生成不应继续依赖该设计。"],
         "open_questions": ["请先完成 REQUIREMENT_ANALYSIS，并确认 structured_prd 已写入阶段产物。"],
         "feedback": feedback_text,
@@ -424,10 +494,24 @@ def normalize_modules(value: Any) -> list[dict[str, Any]]:
                     "name": str(item.get("name") or "").strip(),
                     "responsibility": str(item.get("responsibility") or "").strip(),
                     "dependencies": ensure_text_list(item.get("dependencies")),
+                    "key_decisions": ensure_text_list(item.get("key_decisions") or item.get("keyDecisions")),
+                    "implementation_notes": ensure_text_list(
+                        item.get("implementation_notes") or item.get("implementationNotes")
+                    ),
+                    "test_focus": ensure_text_list(item.get("test_focus") or item.get("testFocus")),
                 }
             )
         elif str(item or "").strip():
-            modules.append({"name": str(item).strip(), "responsibility": "", "dependencies": []})
+            modules.append(
+                {
+                    "name": str(item).strip(),
+                    "responsibility": "",
+                    "dependencies": [],
+                    "key_decisions": [],
+                    "implementation_notes": [],
+                    "test_focus": [],
+                }
+            )
     return modules
 
 
@@ -447,8 +531,8 @@ def normalize_named_items(value: Any) -> list[dict[str, Any]]:
     return items
 
 
-def normalize_file_plan(value: Any) -> list[dict[str, str]]:
-    plan: list[dict[str, str]] = []
+def normalize_file_plan(value: Any) -> list[dict[str, str | list[str]]]:
+    plan: list[dict[str, str | list[str]]] = []
     for item in value if isinstance(value, list) else []:
         if not isinstance(item, dict):
             continue
@@ -460,6 +544,9 @@ def normalize_file_plan(value: Any) -> list[dict[str, str]]:
                 "path": str(item.get("path") or "").strip(),
                 "operation": operation,
                 "reason": str(item.get("reason") or "").strip(),
+                "change_summary": str(item.get("change_summary") or item.get("changeSummary") or "").strip(),
+                "validation": str(item.get("validation") or "").strip(),
+                "related_modules": ensure_text_list(item.get("related_modules") or item.get("relatedModules")),
             }
         )
     return plan
@@ -488,6 +575,16 @@ def normalize_text(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
+def infer_response_language(text: str) -> str:
+    """根据需求和上游 PRD 的主要文字判断 LLM 应使用的自然语言。
+
+    这里不做复杂语言识别，只区分当前项目最关键的两类：中文需求返回简体中文，
+    其他情况保持英文。判断结果会进入 prompt，让模型知道语言一致性是硬约束。
+    """
+
+    return "zh-Hans" if re.search(r"[\u4e00-\u9fff]", text or "") else "en"
+
+
 DESIGN_DOC_SCHEMA = {
     "type": "object",
     "required": ["summary", "modules", "file_plan", "risks", "open_questions"],
@@ -495,6 +592,7 @@ DESIGN_DOC_SCHEMA = {
         "summary": {"type": "string"},
         "modules": {
             "type": "array",
+            "minItems": 3,
             "items": {
                 "type": "object",
                 "required": ["name", "responsibility"],
@@ -502,6 +600,9 @@ DESIGN_DOC_SCHEMA = {
                     "name": {"type": "string"},
                     "responsibility": {"type": "string"},
                     "dependencies": {"type": "array", "items": {"type": "string"}},
+                    "key_decisions": {"type": "array", "items": {"type": "string"}},
+                    "implementation_notes": {"type": "array", "items": {"type": "string"}},
+                    "test_focus": {"type": "array", "items": {"type": "string"}},
                 },
             },
         },
@@ -509,6 +610,7 @@ DESIGN_DOC_SCHEMA = {
         "data_changes": {"type": "array"},
         "file_plan": {
             "type": "array",
+            "minItems": 4,
             "items": {
                 "type": "object",
                 "required": ["path", "operation", "reason"],
@@ -516,9 +618,13 @@ DESIGN_DOC_SCHEMA = {
                     "path": {"type": "string"},
                     "operation": {"type": "string", "enum": ["create", "update", "delete"]},
                     "reason": {"type": "string"},
+                    "change_summary": {"type": "string"},
+                    "validation": {"type": "string"},
+                    "related_modules": {"type": "array", "items": {"type": "string"}},
                 },
             },
         },
+        "test_strategy": {"type": "array"},
         "risks": {"type": "array", "items": {"type": "string"}},
         "open_questions": {"type": "array", "items": {"type": "string"}},
         "quality": {"type": "object"},

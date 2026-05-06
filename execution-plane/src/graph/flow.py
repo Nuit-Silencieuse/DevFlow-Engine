@@ -5,7 +5,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from src.agents import DesignAgent, RequirementAgent
+from src.agents import CoderAgent, DesignAgent, RequirementAgent
 from src.pipeline_context import normalize_pipeline_context
 
 from .state import DevFlowState
@@ -39,12 +39,7 @@ def design_system_node(state: DevFlowState) -> DevFlowState:
 
 
 def generate_code_node(state: DevFlowState) -> DevFlowState:
-    return {
-        "diff_patch": "Code generation is reserved for the coder agent implementation.",
-        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
-        "current_step": CODE_GENERATION,
-        "error_logs": state.get("error_logs", []),
-    }
+    return CoderAgent().run(state)
 
 
 def generate_tests_node(state: DevFlowState) -> DevFlowState:
@@ -118,4 +113,3 @@ def run_stage(stage_name: str, state: DevFlowState) -> DevFlowState:
     merged: dict[str, Any] = dict(state)
     merged.update(updates)
     return merged
-

@@ -379,20 +379,42 @@ def route_after_validation(
 def build_messages(state: RequirementAgentState) -> tuple[LlmMessage, ...]:
     context_pack = state.get("context_pack") or {}
     context_summary = summarize_context_for_prompt(context_pack)
+    response_language = infer_response_language(
+        " ".join(
+            [
+                state.get("requirement_text", ""),
+                state.get("feedback_text", ""),
+            ]
+        )
+    )
     user_payload = {
         "requirement": state.get("requirement_text", ""),
         "human_feedback": state.get("feedback_text", ""),
         "analysis_plan": state.get("analysis_plan", {}),
         "repository_context": context_summary,
+        "response_language": response_language,
+        "minimum_detail": {
+            "user_stories": 3,
+            "acceptance_criteria": 5,
+            "edge_cases": 3,
+            "domain_terms": 3,
+            "non_functional_requirements_per_category": 1,
+        },
     }
     return (
         LlmMessage(
             role="system",
             content=(
                 "你是 DevFlow Engine 的 Requirement Agent。"
+                "输出语言必须严格遵守 user payload 中的 response_language："
+                "当 response_language 为 zh-Hans 时，所有自然语言字段使用简体中文；"
+                "当 response_language 为 en 时，所有自然语言字段使用英文。"
                 "只输出符合 schema 的 JSON，不要编造未知事实；缺失信息写入 open_questions。"
                 "acceptance_criteria 必须是对象数组，每项必须包含 id、description、verification。"
                 "user_stories 必须是对象数组，每项必须包含非空 role、goal、benefit。"
+                "输出必须足够丰富：user_stories 默认至少 3 条，acceptance_criteria 默认至少 5 条，"
+                "edge_cases 默认至少 3 条；每条 description 和 verification 都要可执行、可检查，不能只写短词。"
+                "non_functional_requirements 应尽量覆盖 performance、security、reliability、compatibility。"
             ),
         ),
         LlmMessage(
@@ -1275,6 +1297,16 @@ def normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def infer_response_language(text: str) -> str:
+    """用轻量级检测让 LLM 输出语言跟随需求描述。
+
+    需求描述中只要包含中文字符，就按简体中文生成；否则默认英文。这个判断结果只作为
+    prompt 约束传给模型，不替代 LLM 对需求语义的理解。
+    """
+
+    return "zh-Hans" if re.search(r"[\u4e00-\u9fff]", text or "") else "en"
+
+
 def empty_non_functional_requirements() -> dict[str, list[str]]:
     return {"performance": [], "security": [], "reliability": [], "compatibility": []}
 
@@ -1421,6 +1453,7 @@ REQUIREMENT_PRD_SCHEMA = {
         "scope": {"type": "object"},
         "user_stories": {
             "type": "array",
+            "minItems": 3,
             "items": {
                 "type": "object",
                 "required": ["role", "goal", "benefit"],
@@ -1433,6 +1466,7 @@ REQUIREMENT_PRD_SCHEMA = {
         },
         "acceptance_criteria": {
             "type": "array",
+            "minItems": 5,
             "items": {
                 "type": "object",
                 "required": ["id", "description", "verification"],

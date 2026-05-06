@@ -11,6 +11,7 @@ class DevFlowState(TypedDict, total=False):
     structured_prd: dict[str, Any]
     design_doc: dict[str, Any]
     diff_patch: str
+    code_generation_report: dict[str, Any]
     test_results: dict[str, Any]
     review_report: dict[str, Any]
     delivery_status: dict[str, Any]

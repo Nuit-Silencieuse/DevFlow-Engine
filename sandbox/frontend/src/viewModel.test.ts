@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import {
   buildCreatePipelineRequest,
   buildCodeContextViewModel,
+  buildStageArtifactViewModel,
   formatJson,
   hasArtifact,
+  parseUnifiedDiffForDisplay,
   parsePathList,
   selectReviewStage,
   stageLabel,
@@ -122,12 +124,109 @@ function testBuildCodeContextViewModelFromStageOutput(): void {
   assert.equal(view?.openQuestions[0], "需要确认 worker 状态来源");
 }
 
+function testBuildRequirementArtifactShowsOnlyStructuredPrd(): void {
+  const view = buildStageArtifactViewModel({
+    name: "REQUIREMENT_ANALYSIS",
+    status: "COMPLETED",
+    requiresHumanApproval: false,
+    output: {
+      structured_prd: {
+        summary: "实现代码生成 Agent",
+        problem_statement: "当前代码生成阶段仍是占位逻辑",
+        user_stories: [{ id: "US1", description: "用户可以生成 diff" }],
+        acceptance_criteria: [{ id: "AC1", description: "输出 diff_patch", verification: "检查阶段产物" }],
+      },
+      codeContext: {
+        inspectedFiles: ["execution-plane/src/graph/flow.py"],
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "structured_prd");
+  assert.equal(view?.summaryFields[0]?.value, "实现代码生成 Agent");
+  assert.equal(view?.sections.some((section) => section.title === "用户故事"), true);
+  assert.equal(JSON.stringify(view).includes("inspectedFiles"), false);
+}
+
+function testBuildDesignArtifactShowsOnlyDesignDoc(): void {
+  const view = buildStageArtifactViewModel({
+    name: "SYSTEM_DESIGN",
+    status: "COMPLETED",
+    requiresHumanApproval: true,
+    output: {
+      structured_prd: { summary: "需求不应在设计产物中展示" },
+      design_doc: {
+        summary: "新增 CoderAgent 子图",
+        modules: [{ name: "CoderAgent", responsibility: "生成统一 diff" }],
+        file_plan: [{ path: "execution-plane/src/agents/coder_agent.py", action: "create" }],
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "design_doc");
+  assert.equal(view?.title, "方案设计文档");
+  assert.equal(view?.sections.some((section) => section.title === "模块设计"), true);
+  assert.equal(JSON.stringify(view).includes("需求不应在设计产物中展示"), false);
+}
+
+function testBuildCodeGenerationArtifactShowsDiffByFile(): void {
+  const view = buildStageArtifactViewModel({
+    name: "CODE_GENERATION",
+    status: "COMPLETED",
+    requiresHumanApproval: true,
+    output: {
+      design_doc: { summary: "设计文档不应作为代码生成核心产物" },
+      diff_patch:
+        "diff --git a/src/app.py b/src/app.py\n" +
+        "--- a/src/app.py\n" +
+        "+++ b/src/app.py\n" +
+        "@@ -1,2 +1,2 @@\n" +
+        "-old_value = 1\n" +
+        "+new_value = 1\n",
+      code_generation_report: {
+        summary: "生成 app.py 修改",
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "diff_patch");
+  assert.equal(view?.title, "代码 Diff");
+  assert.equal(view?.summaryFields.some((field) => field.label === "修改文件数" && field.value === "1"), true);
+  assert.equal(view?.sections.some((section) => section.title === "Diff 文件"), true);
+  assert.equal(JSON.stringify(view).includes("src/app.py"), true);
+  assert.equal(JSON.stringify(view).includes("设计文档不应作为代码生成核心产物"), false);
+}
+
+function testParseUnifiedDiffForDisplayKeepsFullDiff(): void {
+  const longBody = Array.from({ length: 30 }, (_, index) => `+line_${index + 1}`).join("\n");
+  const files = parseUnifiedDiffForDisplay(
+    "diff --git a/specs/001-devflow-engine/execution-plane-architecture.md b/specs/001-devflow-engine/execution-plane-architecture.md\n" +
+      "--- a/specs/001-devflow-engine/execution-plane-architecture.md\n" +
+      "+++ b/specs/001-devflow-engine/execution-plane-architecture.md\n" +
+      "@@ -1,1 +1,30 @@\n" +
+      "-old line\n" +
+      `${longBody}\n`,
+  );
+
+  assert.equal(files.length, 1);
+  assert.equal(files[0].header, "Edited specs\\001-devflow-engine\\execution-plane-architecture.md (+30 -1)");
+  assert.equal(files[0].additions, 30);
+  assert.equal(files[0].deletions, 1);
+  assert.equal(files[0].lines.some((line) => line.text === "+line_30"), true);
+  assert.equal(files[0].lines.find((line) => line.text === "+line_1")?.type, "add");
+  assert.equal(files[0].lines.find((line) => line.text === "-old line")?.type, "delete");
+}
+
 function main(): void {
   testBuildCreateRequestOmitsEmptyRepository();
   testBuildCreateRequestNormalizesRepositoryContext();
   testSelectReviewStagePrefersCurrentStage();
   testFormattingHelpers();
   testBuildCodeContextViewModelFromStageOutput();
+  testBuildRequirementArtifactShowsOnlyStructuredPrd();
+  testBuildDesignArtifactShowsOnlyDesignDoc();
+  testBuildCodeGenerationArtifactShowsDiffByFile();
+  testParseUnifiedDiffForDisplayKeepsFullDiff();
 }
 
 main();

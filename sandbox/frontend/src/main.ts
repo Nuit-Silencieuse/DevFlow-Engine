@@ -4,14 +4,17 @@ import type { CheckpointDecision, PipelineStatusResponse, StageStatusResponse } 
 import {
   buildCodeContextViewModel,
   buildCreatePipelineRequest,
+  buildStageArtifactViewModel,
   DEFAULT_STAGE_NAMES,
   formatJson,
   hasArtifact,
+  parseUnifiedDiffForDisplay,
   selectReviewStage,
   STAGE_OPTIONS,
   stageLabel,
   statusTone,
 } from "./viewModel";
+import type { CodeDiffFile } from "./viewModel";
 
 interface AppState {
   pipeline: PipelineStatusResponse | null;
@@ -131,7 +134,7 @@ sandbox/frontend/src/main.ts</textarea>
           <span id="artifactStage" class="subtle-text">未选择阶段</span>
         </div>
         <div id="codeContextPanel" class="code-context-panel"></div>
-        <pre id="artifactOutput" class="artifact-output">{}</pre>
+        <div id="artifactOutput" class="artifact-output artifact-view"></div>
       </section>
 
       <section class="panel checkpoint-panel">
@@ -164,7 +167,7 @@ const pipelineSummary = mustGet<HTMLDivElement>("pipelineSummary");
 const stageList = mustGet<HTMLDivElement>("stageList");
 const artifactStage = mustGet<HTMLSpanElement>("artifactStage");
 const codeContextPanel = mustGet<HTMLDivElement>("codeContextPanel");
-const artifactOutput = mustGet<HTMLPreElement>("artifactOutput");
+const artifactOutput = mustGet<HTMLDivElement>("artifactOutput");
 const checkpointHint = mustGet<HTMLSpanElement>("checkpointHint");
 const submitDecisionButton = mustGet<HTMLButtonElement>("submitDecisionButton");
 const feedbackInput = mustGet<HTMLTextAreaElement>("feedbackInput");
@@ -346,11 +349,140 @@ function renderStageList(
 function renderArtifact(stage: StageStatusResponse | null): void {
   artifactStage.textContent = stage ? `${stageLabel(stage.name)} · ${stage.status}` : "未选择阶段";
   renderCodeContext(stage);
-  artifactOutput.textContent = stage ? formatJson(stage.output) : "{}";
+  renderStageArtifact(stage);
+}
+
+function renderStageArtifact(stage: StageStatusResponse | null): void {
+  artifactOutput.replaceChildren();
+  const view = buildStageArtifactViewModel(stage);
+  if (!view) {
+    const empty = document.createElement("p");
+    empty.className = "empty-text";
+    empty.textContent = "选择阶段后显示核心阶段产物。";
+    artifactOutput.append(empty);
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "artifact-header";
+  const title = document.createElement("div");
+  title.className = "artifact-title";
+  const heading = document.createElement("strong");
+  heading.textContent = view.title;
+  const source = document.createElement("span");
+  source.textContent = view.sourceKey;
+  title.append(heading, source);
+  const description = document.createElement("p");
+  description.textContent = view.description;
+  header.append(title, description);
+  artifactOutput.append(header);
+
+  if (view.summaryFields.length > 0) {
+    const summary = document.createElement("div");
+    summary.className = "artifact-summary";
+    for (const field of view.summaryFields) {
+      summary.append(renderField(field.label, field.value));
+    }
+    artifactOutput.append(summary);
+  }
+
+  const diffText = typeof view.raw === "string" ? view.raw : null;
+  const isCodeDiffArtifact = diffText !== null && (view.sourceKey === "diff_patch" || view.sourceKey === "diffPatch");
+  if (isCodeDiffArtifact) {
+    artifactOutput.append(renderDiffFiles(parseUnifiedDiffForDisplay(diffText)));
+  }
+
+  const visibleSections = isCodeDiffArtifact
+    ? view.sections.filter((section) => !section.title.includes("Diff"))
+    : view.sections;
+
+  if (visibleSections.length === 0 && !isCodeDiffArtifact) {
+    const empty = document.createElement("p");
+    empty.className = "empty-text";
+    empty.textContent = "该核心产物暂无可展开字段。";
+    artifactOutput.append(empty);
+  }
+
+  for (const section of visibleSections) {
+    const sectionElement = document.createElement("section");
+    sectionElement.className = "artifact-section";
+    sectionElement.append(sectionTitle(section.title));
+
+    for (const item of section.items) {
+      const card = document.createElement("div");
+      card.className = "artifact-card";
+      for (const field of item) {
+        card.append(renderField(field.label, field.value));
+      }
+      sectionElement.append(card);
+    }
+    artifactOutput.append(sectionElement);
+  }
+
+  const details = document.createElement("details");
+  details.className = "artifact-raw";
+  const summary = document.createElement("summary");
+  summary.textContent = "查看原始 JSON";
+  const raw = document.createElement("pre");
+  raw.textContent = typeof view.raw === "string" ? view.raw : formatJson(view.raw);
+  details.append(summary, raw);
+  artifactOutput.append(details);
+}
+
+function renderField(label: string, value: string): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "artifact-field";
+  const labelElement = document.createElement("span");
+  labelElement.textContent = label;
+  const valueElement = document.createElement("p");
+  valueElement.textContent = value;
+  row.append(labelElement, valueElement);
+  return row;
+}
+
+function renderDiffFiles(files: CodeDiffFile[]): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "artifact-section diff-section";
+  section.append(sectionTitle("Diff 文件"));
+
+  if (files.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-text";
+    empty.textContent = "没有可展示的 diff。";
+    section.append(empty);
+    return section;
+  }
+
+  for (const file of files) {
+    const fileBlock = document.createElement("article");
+    fileBlock.className = "diff-file";
+
+    const header = document.createElement("div");
+    header.className = "diff-file-heading";
+    header.textContent = file.header;
+
+    const code = document.createElement("code");
+    code.className = "diff-code";
+    for (const line of file.lines) {
+      const row = document.createElement("span");
+      row.className = `diff-line ${line.type}`;
+      row.textContent = line.text || " ";
+      code.append(row);
+    }
+
+    const pre = document.createElement("pre");
+    pre.append(code);
+    fileBlock.append(header, pre);
+    section.append(fileBlock);
+  }
+  return section;
 }
 
 function renderCodeContext(stage: StageStatusResponse | null): void {
   codeContextPanel.replaceChildren();
+  if (stage?.name === "REQUIREMENT_ANALYSIS" || stage?.name === "SYSTEM_DESIGN") {
+    return;
+  }
   const view = buildCodeContextViewModel(stage?.output ?? null);
   if (!view) {
     return;

@@ -52,10 +52,23 @@ class StubDesignAgent:
         }
 
 
+class StubCoderAgent:
+    def run(self, state):
+        return {
+            "diff_patch": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "code_generation_report": {"source": "coder_agent"},
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "CODE_GENERATION",
+            "error_logs": state.get("error_logs", []),
+        }
+
+
 class DevFlowGraphTest(unittest.TestCase):
     def test_graph_runs_all_pipeline_nodes_in_order(self):
         with patch("src.graph.flow.RequirementAgent", StubRequirementAgent), patch(
             "src.graph.flow.DesignAgent", StubDesignAgent
+        ), patch(
+            "src.graph.flow.CoderAgent", StubCoderAgent
         ):
             graph = build_devflow_graph()
             result = graph.invoke({"original_requirement": "实现用户登录、注册和鉴权"})

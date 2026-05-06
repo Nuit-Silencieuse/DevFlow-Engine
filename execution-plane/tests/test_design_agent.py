@@ -109,6 +109,25 @@ class DesignAgentTest(unittest.TestCase):
                     "name": "PipelineConsole",
                     "responsibility": "展示阶段状态、PRD 和代码证据",
                     "dependencies": ["Pipeline API"],
+                    "key_decisions": ["阶段产物只展示核心结构，调试字段折叠处理"],
+                    "implementation_notes": ["在主界面保留状态区域，在下半屏渲染产物详情"],
+                    "test_focus": ["验证需求阶段只展示 structured_prd"],
+                },
+                {
+                    "name": "ArtifactViewModel",
+                    "responsibility": "把 JSON 阶段产物转换为人类可读的分组视图",
+                    "dependencies": ["StageStatusResponse"],
+                    "key_decisions": ["需求阶段和设计阶段使用不同核心字段"],
+                    "implementation_notes": ["保留原始 JSON 作为折叠调试入口"],
+                    "test_focus": ["验证 design_doc 不混入 structured_prd"],
+                },
+                {
+                    "name": "CheckpointPanel",
+                    "responsibility": "为人工审批提供足够大的反馈区域",
+                    "dependencies": ["Checkpoint API"],
+                    "key_decisions": ["审批区与产物区并列放在页面下半部分"],
+                    "implementation_notes": ["反馈框高度固定增大，避免长文本输入拥挤"],
+                    "test_focus": ["验证提交 approve/reject 的 API 契约"],
                 }
             ],
             "api_contracts": [
@@ -123,6 +142,33 @@ class DesignAgentTest(unittest.TestCase):
                     "path": "sandbox/frontend/src/viewModel.ts",
                     "operation": "update",
                     "reason": "补充 design_doc 展示模型",
+                    "change_summary": "新增阶段核心产物选择和展示模型",
+                    "validation": "运行 viewModel.test.ts",
+                    "related_modules": ["ArtifactViewModel"],
+                },
+                {
+                    "path": "sandbox/frontend/src/main.ts",
+                    "operation": "update",
+                    "reason": "渲染结构化阶段产物",
+                    "change_summary": "替换原始 JSON dump 为分组 DOM 视图",
+                    "validation": "运行前端构建并在控制台检查阶段详情",
+                    "related_modules": ["PipelineConsole"],
+                },
+                {
+                    "path": "sandbox/frontend/src/styles.css",
+                    "operation": "update",
+                    "reason": "扩大产物和检查点区域",
+                    "change_summary": "调整页面下半区布局和滚动高度",
+                    "validation": "运行 Vite build 并人工检查 5173 页面",
+                    "related_modules": ["PipelineConsole", "CheckpointPanel"],
+                },
+                {
+                    "path": "sandbox/frontend/src/viewModel.test.ts",
+                    "operation": "update",
+                    "reason": "覆盖核心产物选择规则",
+                    "change_summary": "新增需求阶段和设计阶段产物过滤测试",
+                    "validation": "运行 npm test",
+                    "related_modules": ["ArtifactViewModel"],
                 }
             ],
             "risks": ["需要控制 outputPayload 展示长度"],
@@ -156,12 +202,62 @@ class DesignAgentTest(unittest.TestCase):
             {
                 "summary": "修订后的设计",
                 "modules": [
-                    {"name": "StageArtifactPanel", "responsibility": "展示产物", "dependencies": []}
+                    {
+                        "name": "StageArtifactPanel",
+                        "responsibility": "展示产物",
+                        "dependencies": [],
+                        "key_decisions": ["突出核心产物"],
+                        "implementation_notes": ["根据阶段选择核心字段"],
+                        "test_focus": ["检查 design_doc 展示"],
+                    },
+                    {
+                        "name": "ArtifactFormatter",
+                        "responsibility": "格式化结构化字段",
+                        "dependencies": [],
+                        "key_decisions": ["保留原始 JSON"],
+                        "implementation_notes": ["对象数组按卡片展示"],
+                        "test_focus": ["检查字段分组"],
+                    },
+                    {
+                        "name": "CheckpointFeedback",
+                        "responsibility": "处理人工反馈",
+                        "dependencies": [],
+                        "key_decisions": ["反馈区加高"],
+                        "implementation_notes": ["维持现有 Signal 契约"],
+                        "test_focus": ["检查反馈提交"],
+                    },
                 ],
                 "api_contracts": [],
                 "data_changes": [],
                 "file_plan": [
-                    {"path": "sandbox/frontend/src/main.ts", "operation": "update", "reason": "展示反馈"}
+                    {
+                        "path": "sandbox/frontend/src/main.ts",
+                        "operation": "update",
+                        "reason": "展示反馈",
+                        "change_summary": "更新审批提示",
+                        "validation": "运行前端测试",
+                    },
+                    {
+                        "path": "sandbox/frontend/src/viewModel.ts",
+                        "operation": "update",
+                        "reason": "支持产物模型",
+                        "change_summary": "新增格式化函数",
+                        "validation": "运行 viewModel 测试",
+                    },
+                    {
+                        "path": "sandbox/frontend/src/styles.css",
+                        "operation": "update",
+                        "reason": "扩大展示区域",
+                        "change_summary": "调整布局",
+                        "validation": "运行构建",
+                    },
+                    {
+                        "path": "sandbox/frontend/src/viewModel.test.ts",
+                        "operation": "update",
+                        "reason": "覆盖反馈设计",
+                        "change_summary": "新增断言",
+                        "validation": "运行 npm test",
+                    },
                 ],
                 "risks": ["API 字段兼容性需要人工确认"],
                 "open_questions": [],
@@ -176,6 +272,10 @@ class DesignAgentTest(unittest.TestCase):
 
         serialized_messages = json.dumps(provider.last_messages, ensure_ascii=False)
         self.assertIn("请把 API 字段兼容性风险写清楚", serialized_messages)
+        user_payload = json.loads(provider.last_messages[1]["content"])
+        self.assertEqual(user_payload["response_language"], "zh-Hans")
+        self.assertIn("modules 至少 3 项", serialized_messages)
+        self.assertIn("file_plan 至少 4 项", serialized_messages)
         self.assertEqual(result["design_doc"]["feedback"], "请把 API 字段兼容性风险写清楚。")
 
     def test_missing_prd_returns_diagnostic_design_doc(self):

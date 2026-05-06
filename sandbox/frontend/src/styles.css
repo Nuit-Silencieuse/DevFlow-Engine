@@ -122,8 +122,12 @@ h2 {
 .workbench {
   display: grid;
   grid-template-columns: minmax(360px, 1.04fr) minmax(360px, 0.96fr);
+  grid-template-areas:
+    "create monitor"
+    "artifact checkpoint";
   gap: 16px;
   padding: 18px;
+  align-items: start;
 }
 
 .panel {
@@ -135,7 +139,24 @@ h2 {
 }
 
 .create-panel {
-  grid-row: span 3;
+  grid-area: create;
+}
+
+.monitor-panel {
+  grid-area: monitor;
+}
+
+.artifact-panel {
+  grid-area: artifact;
+}
+
+.checkpoint-panel {
+  grid-area: checkpoint;
+}
+
+.artifact-panel,
+.checkpoint-panel {
+  min-height: 48vh;
 }
 
 .panel-heading {
@@ -349,6 +370,194 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.artifact-view {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 520px;
+  max-height: 72vh;
+  white-space: normal;
+}
+
+.artifact-header {
+  display: grid;
+  gap: 7px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d7dde5;
+}
+
+.artifact-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.artifact-title strong {
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.artifact-title span {
+  padding: 4px 8px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  color: #4b5968;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.artifact-header p {
+  margin: 0;
+  color: #667789;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.artifact-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.artifact-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.artifact-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  padding: 12px;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.artifact-field {
+  min-width: 0;
+}
+
+.artifact-field span {
+  display: block;
+  margin-bottom: 4px;
+  color: #667789;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.artifact-field p {
+  margin: 0;
+  color: #25313f;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-section {
+  gap: 12px;
+}
+
+.diff-file {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.diff-file-heading {
+  padding: 10px 12px;
+  border-bottom: 1px solid #d7dde5;
+  color: #1f2933;
+  background: #f8fafc;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.diff-file pre {
+  max-height: none;
+  margin: 0;
+  overflow: auto;
+  background: #ffffff;
+}
+
+.diff-code {
+  display: block;
+  min-width: max-content;
+  padding: 8px 0;
+  font-family: Consolas, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.48;
+  white-space: pre;
+}
+
+.diff-line {
+  display: block;
+  min-height: 18px;
+  padding: 0 12px;
+  color: #1f2933;
+}
+
+.diff-line.add {
+  color: #0f5132;
+  background: #dff8e7;
+}
+
+.diff-line.delete {
+  color: #842029;
+  background: #fde2e1;
+}
+
+.diff-line.hunk {
+  color: #075985;
+  background: #e5f3ff;
+  font-weight: 700;
+}
+
+.diff-line.meta {
+  color: #667789;
+  background: #f3f6f9;
+}
+
+.artifact-summary .artifact-field {
+  min-height: 78px;
+  padding: 10px;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.artifact-raw {
+  border-top: 1px solid #d7dde5;
+  padding-top: 10px;
+}
+
+.artifact-raw summary {
+  color: #4b5968;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.artifact-raw pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .code-context-panel {
   display: grid;
   gap: 12px;
@@ -440,6 +649,10 @@ button:focus-visible {
   margin-top: 14px;
 }
 
+.checkpoint-panel textarea {
+  min-height: 164px;
+}
+
 .decision-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -448,14 +661,23 @@ button:focus-visible {
 }
 
 @media (max-width: 1120px) {
+  .workbench {
+    grid-template-areas:
+      "create"
+      "monitor"
+      "artifact"
+      "checkpoint";
+  }
+
   .workbench,
   .repository-grid,
   .path-grid {
     grid-template-columns: 1fr;
   }
 
-  .create-panel {
-    grid-row: auto;
+  .artifact-summary,
+  .artifact-card {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -479,6 +701,8 @@ button:focus-visible {
   .stage-options,
   .summary-grid,
   .code-context-stats,
+  .artifact-summary,
+  .artifact-card,
   .decision-row,
   .stage-row {
     grid-template-columns: 1fr;

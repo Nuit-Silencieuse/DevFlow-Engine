@@ -55,7 +55,7 @@ description: "基于设计制品生成的开发任务列表"
 - [x] T021 [US1] 在 Python 执行平面实现可配置 LLM 调用客户端 (`execution-plane/src/llm/`)，支持至少两个 Provider、运行时切换、结构化 JSON 输出和可测试的 Fake Provider
 - [x] T022 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
 - [x] T023 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
-- [ ] T024 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)
+- [x] T024 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)
 - [ ] T025 [US1] 实现负责测试生成的 Agent 节点逻辑 (`execution-plane/src/agents/test_agent.py`)
 - [ ] T026 [US1] 实现负责代码评审的 Agent 节点逻辑 (`execution-plane/src/agents/review_agent.py`)
 - [ ] T027 [US1] 实现负责交付集成的 Agent 节点逻辑 (`execution-plane/src/agents/delivery_agent.py`)

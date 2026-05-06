@@ -2,7 +2,13 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from src.workers.activities import analyze_requirement, design_system, registered_activities, _state_from_request
+from src.workers.activities import (
+    analyze_requirement,
+    design_system,
+    generate_code,
+    registered_activities,
+    _state_from_request,
+)
 from src.workers.worker import TASK_QUEUE
 
 
@@ -28,6 +34,21 @@ class StubDesignAgent:
             },
             "pipeline_context": state.get("pipeline_context", {}),
             "current_step": "SYSTEM_DESIGN",
+            "error_logs": [],
+        }
+
+
+class StubCoderAgent:
+    def run(self, state):
+        return {
+            "diff_patch": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "code_generation_report": {
+                "status": "GENERATED",
+                "source": "coder_agent",
+                "summary": state["design_doc"]["summary"],
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "CODE_GENERATION",
             "error_logs": [],
         }
 
@@ -96,6 +117,32 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertEqual(result["stageName"], "SYSTEM_DESIGN")
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["outputPayload"]["design_doc"]["source"], "design_agent")
+        self.assertIn("pipeline_context", result["outputPayload"])
+
+    def test_code_generation_activity_returns_diff_patch_for_console_display(self):
+        with patch("src.graph.flow.CoderAgent", StubCoderAgent):
+            result = asyncio.run(
+                generate_code(
+                    {
+                        "pipelineId": "00000000-0000-0000-0000-000000000001",
+                        "stageName": "CODE_GENERATION",
+                        "requirement": "生成代码",
+                        "globalContext": {},
+                        "previousOutput": {
+                            "design_doc": {"summary": "代码生成方案"},
+                            "pipeline_context": {
+                                "version": 1,
+                                "code_contexts": [],
+                                "artifact_index": {},
+                            },
+                        },
+                    }
+                )
+            )
+
+        self.assertEqual(result["stageName"], "CODE_GENERATION")
+        self.assertIn("diff --git", result["outputPayload"]["diff_patch"])
+        self.assertEqual(result["outputPayload"]["code_generation_report"]["source"], "coder_agent")
         self.assertIn("pipeline_context", result["outputPayload"])
 
     def test_state_from_request_exposes_repository_context_to_agents(self):

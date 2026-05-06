@@ -231,7 +231,7 @@ result_state = run_stage("SYSTEM_DESIGN", state)
 |----------|----------|----------|
 | `analyze_requirement_node` | `structured_prd`, `code_context`, `current_step`, `error_logs` | 已调用 T022 Requirement Agent，通过 LLM Client 生成结构化 PRD，并记录上下文证据 |
 | `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T023 Design Agent |
-| `generate_code_node` | `diff_patch`, `current_step`, `error_logs` | 写入代码生成占位文本，等待 T024 Coder Agent |
+| `generate_code_node` | `diff_patch`, `code_generation_report`, `current_step`, `error_logs` | 已调用 T024 CoderAgent，通过 LLM Client 生成可审查 unified diff，不直接写文件或提交 Git |
 | `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T025 Test Agent |
 | `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T026 Review Agent |
 | `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T027 Delivery Agent |
@@ -435,7 +435,7 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 - T021: 已实现可配置 LLM 调用客户端，支持至少两个 Provider、运行时切换和结构化 JSON 输出。
 - T022: 已将 `analyze_requirement_node` 替换为需求分析 Agent。
 - T023: 已将 `design_system_node` 替换为系统设计 Agent。
-- T024: 将 `generate_code_node` 替换为代码生成 Agent。
+- T024: 已将 `generate_code_node` 替换为代码生成 Agent。
 - T025: 将 `generate_tests_node` 替换为测试生成 Agent。
 - T026: 将 `review_code_node` 替换为代码评审 Agent。
 - T027: 将 `integrate_delivery_node` 替换为交付集成 Agent。
@@ -485,6 +485,39 @@ DesignAgent 在以下位置输出 warning，方便本地调试和真实 LLM 调�
 - `source = design_agent`
 
 `SYSTEM_DESIGN` Activity 输出会继续携带 `pipeline_context`，保证后续 `CODE_GENERATION` 阶段可以复用需求分析和设计阶段的共享上下文。
+
+## T024 CoderAgent 子图实现
+
+`execution-plane/src/agents/coder_agent.py` 承载 `CODE_GENERATION` 阶段的真实业务逻辑。它不会直接修改目标仓库，也不会执行 shell、git 或测试命令；它只根据 `design_doc`、`structured_prd`、`code_context` 和人工反馈生成可审查的 unified diff，并把结构化生成报告写入 `code_generation_report`。这样可以让控制平面、人工检查点和后续沙箱执行阶段在同一个明确边界上协作。
+
+### 子图节点
+
+| 节点 | 作用 |
+|------|------|
+| `prepare_input` | 校验 `design_doc` 是否存在，提取 `structured_prd`、`code_context`、`pipeline_context` 和 `human_feedback`，并根据需求语言推断输出语言。 |
+| `plan_code` | 从设计文档中整理 `file_plan`、模块计划和上下文证据，形成给 LLM 的代码生成边界。 |
+| `draft_code_patch` | 调用 `LlmClient.complete_json(task="code_generation")`，要求模型只返回 schema 约束下的 JSON，其中核心字段是 `diff_patch`。 |
+| `validate_patch` | 校验 `diff_patch` 是否为空、是否像 unified diff、是否夹带命令执行或 Git 提交等越权指令。 |
+| `repair_patch` | 只做格式级修复，例如去掉模型包裹在 Markdown fenced code block 中的 diff；不会臆造代码变更。 |
+| `finalize` | 生成 `diff_patch`、`code_generation_report`、`pipeline_context.artifact_index.CODE_GENERATION` 和 `current_step`。 |
+| `fail_soft` | 输入缺失或修复后仍不可信时返回阻塞态报告，避免后续阶段误用空 diff。 |
+
+### 输入输出
+
+输入侧以 `design_doc` 为硬依赖。`structured_prd` 提供业务目标和验收标准，`code_context` 提供渐进式探索得到的 evidence，`human_feedback` 用于人工检查点后的增量约束。CoderAgent 会在 prompt 中明确要求“只生成 unified diff，不写入文件，不执行命令”，并要求模型优先修改 `design_doc.file_plan` 和 evidence 支持的文件。
+
+输出侧包含两个核心产物：
+
+- `diff_patch`: unified diff 文本，供人工审查、前端展示和后续沙箱应用。
+- `code_generation_report`: 结构化报告，包含摘要、变更文件、风险、开放问题、质量检查和失败原因。
+
+`pipeline_context` 会追加 `CODE_GENERATION` 的 artifact 索引，便于 TestAgent、ReviewAgent 和控制平面复用同一份 diff，而不是重复要求 CoderAgent 生成。
+
+### 前端 Diff 展示
+
+流水线控制台在 `CODE_GENERATION` 阶段只把 `diff_patch` 作为核心阶段产物。`sandbox/frontend/src/viewModel.ts` 会解析 unified diff，按文件展示新增/删除行统计和预览片段，并保留原始 diff 供展开查看。这样前端不需要理解完整代码生成报告，也不会把 `design_doc`、`structured_prd` 等上游大 JSON 混在代码审查界面里。
+
+当前实现仍然是“生成补丁”阶段，不是“应用补丁”阶段。是否把 diff 应用到工作区、是否运行测试、是否允许提交 Git，都应交给后续沙箱执行、测试生成和人工审批流程控制。
 
 ## 代码库上下文工具
 
