@@ -81,6 +81,9 @@ class PipelineServiceTest {
         assertThat(saved.getStages()).extracting("name")
             .containsExactly("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION");
         assertThat(saved.getStages().get(1).isRequiresHumanApproval()).isTrue();
+        assertThat(PipelineService.createStage("CODE_GENERATION").isRequiresHumanApproval()).isTrue();
+        assertThat(PipelineService.createStage("TEST_GENERATION").isRequiresHumanApproval()).isTrue();
+        assertThat(PipelineService.createStage("APPLY_AND_RUN_TESTS").isRequiresHumanApproval()).isFalse();
 
         DevFlowWorkflowInput workflowInput = workflowInputCaptor.getValue();
         assertThat(workflowInput.pipelineId()).isEqualTo(saved.getId());

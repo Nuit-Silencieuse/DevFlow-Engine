@@ -17,6 +17,9 @@ public interface DevFlowActivities {
     @ActivityMethod(name = "generateTests")
     StageExecutionResult generateTests(StageExecutionRequest request);
 
+    @ActivityMethod(name = "applyAndRunTests")
+    StageExecutionResult applyAndRunTests(StageExecutionRequest request);
+
     @ActivityMethod(name = "reviewCode")
     StageExecutionResult reviewCode(StageExecutionRequest request);
 

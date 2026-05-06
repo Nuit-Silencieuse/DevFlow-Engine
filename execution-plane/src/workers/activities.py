@@ -5,6 +5,7 @@ from typing import Any
 from temporalio import activity
 
 from src.graph.flow import (
+    APPLY_AND_RUN_TESTS,
     CODE_GENERATION,
     CODE_REVIEW,
     DELIVERY_INTEGRATION,
@@ -39,6 +40,11 @@ async def generate_tests(request: StageExecutionRequest) -> StageExecutionResult
     return _execute_stage(TEST_GENERATION, request)
 
 
+@activity.defn(name="applyAndRunTests")
+async def apply_and_run_tests(request: StageExecutionRequest) -> StageExecutionResult:
+    return _execute_stage(APPLY_AND_RUN_TESTS, request)
+
+
 @activity.defn(name="reviewCode")
 async def review_code(request: StageExecutionRequest) -> StageExecutionResult:
     return _execute_stage(CODE_REVIEW, request)
@@ -55,6 +61,7 @@ def registered_activities():
         design_system,
         generate_code,
         generate_tests,
+        apply_and_run_tests,
         review_code,
         integrate_delivery,
     ]
@@ -102,6 +109,7 @@ def _merge_known_state(state: DevFlowState, payload: dict[str, Any]) -> None:
         "diff_patch",
         "code_generation_report",
         "test_results",
+        "test_run_results",
         "review_report",
         "delivery_status",
         "human_feedback",
@@ -128,6 +136,7 @@ def _output_payload_for_stage(stage_name: str, state: DevFlowState) -> dict[str,
         SYSTEM_DESIGN: ("structured_prd", "design_doc", "human_feedback", "pipeline_context"),
         CODE_GENERATION: ("design_doc", "diff_patch", "code_generation_report", "pipeline_context"),
         TEST_GENERATION: ("diff_patch", "test_results", "pipeline_context"),
+        APPLY_AND_RUN_TESTS: ("test_results", "test_run_results", "pipeline_context"),
         CODE_REVIEW: ("test_results", "review_report", "pipeline_context"),
         DELIVERY_INTEGRATION: ("review_report", "delivery_status", "pipeline_context"),
     }[stage_name]

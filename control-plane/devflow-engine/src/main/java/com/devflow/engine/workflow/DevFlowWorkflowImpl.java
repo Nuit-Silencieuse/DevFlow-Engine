@@ -12,7 +12,9 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
     private static final List<String> DEFAULT_STAGES = List.of(
         "REQUIREMENT_ANALYSIS",
         "SYSTEM_DESIGN",
-        "CODE_GENERATION"
+        "CODE_GENERATION",
+        "TEST_GENERATION",
+        "APPLY_AND_RUN_TESTS"
     );
 
     private final DevFlowActivities activities;
@@ -53,8 +55,8 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
             StageExecutionResult result = executeStage(stageName, globalContext, previousOutput);
             previousOutput = result.outputPayload();
 
-            if ("SYSTEM_DESIGN".equals(stageName)) {
-                CheckpointSignal decision = waitForDesignDecision(stageName);
+            if (requiresHumanApproval(stageName)) {
+                CheckpointSignal decision = waitForHumanDecision(stageName);
                 while (decision.decision() == CheckpointDecision.REJECT) {
                     stageResults.add(new StageExecutionResult(
                         stageName,
@@ -67,7 +69,7 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
 
                     result = executeStage(stageName, globalContext, previousOutput);
                     previousOutput = result.outputPayload();
-                    decision = waitForDesignDecision(stageName);
+                    decision = waitForHumanDecision(stageName);
                 }
             }
         }
@@ -133,6 +135,7 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
             case "SYSTEM_DESIGN" -> activities.designSystem(request);
             case "CODE_GENERATION" -> activities.generateCode(request);
             case "TEST_GENERATION" -> activities.generateTests(request);
+            case "APPLY_AND_RUN_TESTS" -> activities.applyAndRunTests(request);
             case "CODE_REVIEW" -> activities.reviewCode(request);
             case "DELIVERY_INTEGRATION" -> activities.integrateDelivery(request);
             default -> throw new IllegalArgumentException("Unsupported workflow stage: " + stageName);
@@ -142,9 +145,15 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
         return result;
     }
 
-    private CheckpointSignal waitForDesignDecision(String stageName) {
+    private CheckpointSignal waitForHumanDecision(String stageName) {
         updateStatus("SUSPENDED", stageName);
         return waitForCheckpointDecision(stageName);
+    }
+
+    private static boolean requiresHumanApproval(String stageName) {
+        return "SYSTEM_DESIGN".equals(stageName)
+            || "CODE_GENERATION".equals(stageName)
+            || "TEST_GENERATION".equals(stageName);
     }
 
     private void updateStatus(String statusName, String currentStage) {

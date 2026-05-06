@@ -6,6 +6,8 @@ from src.workers.activities import (
     analyze_requirement,
     design_system,
     generate_code,
+    generate_tests,
+    apply_and_run_tests,
     registered_activities,
     _state_from_request,
 )
@@ -53,6 +55,41 @@ class StubCoderAgent:
         }
 
 
+class StubTestAgent:
+    def run(self, state):
+        return {
+            "test_results": {
+                "status": "GENERATED",
+                "source": "test_agent",
+                "summary": "生成测试代码并记录执行结果",
+                "test_diff_patch": "diff --git a/tests/test_a.py b/tests/test_a.py\n--- a/tests/test_a.py\n+++ b/tests/test_a.py\n@@ -0,0 +1 @@\n+def test_a(): pass\n",
+                "execution_results": [
+                    {
+                        "command": "python -m unittest tests.test_test_agent",
+                        "status": "NOT_RUN",
+                    }
+                ],
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "TEST_GENERATION",
+            "error_logs": [],
+        }
+
+
+class StubApplyAndRunTestsAgent:
+    def run(self, state):
+        return {
+            "test_run_results": {
+                "status": "PASSED",
+                "source": "apply_and_run_tests_agent",
+                "summary": "等待人工应用补丁并回填真实测试结果。",
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "APPLY_AND_RUN_TESTS",
+            "error_logs": [],
+        }
+
+
 class TemporalWorkerActivitiesTest(unittest.TestCase):
     def test_registered_activity_names_match_java_contract(self):
         names = [
@@ -67,6 +104,7 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
                 "designSystem",
                 "generateCode",
                 "generateTests",
+                "applyAndRunTests",
                 "reviewCode",
                 "integrateDelivery",
             ],
@@ -144,6 +182,61 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertIn("diff --git", result["outputPayload"]["diff_patch"])
         self.assertEqual(result["outputPayload"]["code_generation_report"]["source"], "coder_agent")
         self.assertIn("pipeline_context", result["outputPayload"])
+
+    def test_test_generation_activity_returns_test_results_for_console_display(self):
+        with patch("src.graph.flow.TestAgent", StubTestAgent):
+            result = asyncio.run(
+                generate_tests(
+                    {
+                        "pipelineId": "00000000-0000-0000-0000-000000000001",
+                        "stageName": "TEST_GENERATION",
+                        "requirement": "生成测试",
+                        "globalContext": {},
+                        "previousOutput": {
+                            "diff_patch": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a\n+b\n",
+                            "pipeline_context": {
+                                "version": 1,
+                                "code_contexts": [],
+                                "artifact_index": {},
+                            },
+                        },
+                    }
+                )
+            )
+
+        self.assertEqual(result["stageName"], "TEST_GENERATION")
+        self.assertIn("test_results", result["outputPayload"])
+        self.assertIn("diff --git", result["outputPayload"]["test_results"]["test_diff_patch"])
+        self.assertEqual(result["outputPayload"]["test_results"]["source"], "test_agent")
+        self.assertIn("pipeline_context", result["outputPayload"])
+
+    def test_apply_and_run_tests_activity_returns_test_run_result(self):
+        with patch("src.graph.flow.ApplyAndRunTestsAgent", StubApplyAndRunTestsAgent):
+            result = asyncio.run(
+                apply_and_run_tests(
+                    {
+                        "pipelineId": "00000000-0000-0000-0000-000000000001",
+                        "stageName": "APPLY_AND_RUN_TESTS",
+                        "requirement": "运行测试",
+                        "globalContext": {},
+                        "previousOutput": {
+                            "test_results": {
+                                "test_diff_patch": "diff --git a/tests/test_a.py b/tests/test_a.py\n",
+                                "test_commands": [{"command": "python -m unittest discover -s tests"}],
+                            },
+                            "pipeline_context": {
+                                "version": 1,
+                                "code_contexts": [],
+                                "artifact_index": {},
+                            },
+                        },
+                    }
+                )
+            )
+
+        self.assertEqual(result["stageName"], "APPLY_AND_RUN_TESTS")
+        self.assertEqual(result["outputPayload"]["test_run_results"]["status"], "PASSED")
+        self.assertEqual(result["outputPayload"]["test_run_results"]["source"], "apply_and_run_tests_agent")
 
     def test_state_from_request_exposes_repository_context_to_agents(self):
         state = _state_from_request(

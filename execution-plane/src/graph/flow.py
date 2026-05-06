@@ -5,7 +5,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from src.agents import CoderAgent, DesignAgent, RequirementAgent
+from src.agents import ApplyAndRunTestsAgent, CoderAgent, DesignAgent, RequirementAgent, TestAgent
 from src.pipeline_context import normalize_pipeline_context
 
 from .state import DevFlowState
@@ -17,6 +17,7 @@ REQUIREMENT_ANALYSIS = "REQUIREMENT_ANALYSIS"
 SYSTEM_DESIGN = "SYSTEM_DESIGN"
 CODE_GENERATION = "CODE_GENERATION"
 TEST_GENERATION = "TEST_GENERATION"
+APPLY_AND_RUN_TESTS = "APPLY_AND_RUN_TESTS"
 CODE_REVIEW = "CODE_REVIEW"
 DELIVERY_INTEGRATION = "DELIVERY_INTEGRATION"
 
@@ -25,6 +26,7 @@ STAGE_ORDER = [
     SYSTEM_DESIGN,
     CODE_GENERATION,
     TEST_GENERATION,
+    APPLY_AND_RUN_TESTS,
     CODE_REVIEW,
     DELIVERY_INTEGRATION,
 ]
@@ -43,15 +45,11 @@ def generate_code_node(state: DevFlowState) -> DevFlowState:
 
 
 def generate_tests_node(state: DevFlowState) -> DevFlowState:
-    return {
-        "test_results": {
-            "status": "PENDING",
-            "summary": "Test generation is reserved for the test agent implementation.",
-        },
-        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
-        "current_step": TEST_GENERATION,
-        "error_logs": state.get("error_logs", []),
-    }
+    return TestAgent().run(state)
+
+
+def apply_and_run_tests_node(state: DevFlowState) -> DevFlowState:
+    return ApplyAndRunTestsAgent().run(state)
 
 
 def review_code_node(state: DevFlowState) -> DevFlowState:
@@ -83,6 +81,7 @@ STAGE_NODES: dict[str, GraphNode] = {
     SYSTEM_DESIGN: design_system_node,
     CODE_GENERATION: generate_code_node,
     TEST_GENERATION: generate_tests_node,
+    APPLY_AND_RUN_TESTS: apply_and_run_tests_node,
     CODE_REVIEW: review_code_node,
     DELIVERY_INTEGRATION: integrate_delivery_node,
 }
@@ -97,7 +96,8 @@ def build_devflow_graph():
     builder.add_edge(REQUIREMENT_ANALYSIS, SYSTEM_DESIGN)
     builder.add_edge(SYSTEM_DESIGN, CODE_GENERATION)
     builder.add_edge(CODE_GENERATION, TEST_GENERATION)
-    builder.add_edge(TEST_GENERATION, CODE_REVIEW)
+    builder.add_edge(TEST_GENERATION, APPLY_AND_RUN_TESTS)
+    builder.add_edge(APPLY_AND_RUN_TESTS, CODE_REVIEW)
     builder.add_edge(CODE_REVIEW, DELIVERY_INTEGRATION)
     builder.add_edge(DELIVERY_INTEGRATION, END)
     return builder.compile()

@@ -13,6 +13,7 @@ class DevFlowState(TypedDict, total=False):
     diff_patch: str
     code_generation_report: dict[str, Any]
     test_results: dict[str, Any]
+    test_run_results: dict[str, Any]
     review_report: dict[str, Any]
     delivery_status: dict[str, Any]
     human_feedback: str

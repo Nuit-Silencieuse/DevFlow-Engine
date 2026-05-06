@@ -63,12 +63,43 @@ class StubCoderAgent:
         }
 
 
+class StubTestAgent:
+    def run(self, state):
+        return {
+            "test_results": {
+                "status": "GENERATED",
+                "source": "test_agent",
+                "test_diff_patch": "diff --git a/tests/test_a.py b/tests/test_a.py\n--- a/tests/test_a.py\n+++ b/tests/test_a.py\n@@ -0,0 +1 @@\n+def test_a(): pass\n",
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "TEST_GENERATION",
+            "error_logs": state.get("error_logs", []),
+        }
+
+
+class StubApplyAndRunTestsAgent:
+    def run(self, state):
+        return {
+            "test_run_results": {
+                "status": "PASSED",
+                "source": "apply_and_run_tests_agent",
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "APPLY_AND_RUN_TESTS",
+            "error_logs": state.get("error_logs", []),
+        }
+
+
 class DevFlowGraphTest(unittest.TestCase):
     def test_graph_runs_all_pipeline_nodes_in_order(self):
         with patch("src.graph.flow.RequirementAgent", StubRequirementAgent), patch(
             "src.graph.flow.DesignAgent", StubDesignAgent
         ), patch(
             "src.graph.flow.CoderAgent", StubCoderAgent
+        ), patch(
+            "src.graph.flow.TestAgent", StubTestAgent
+        ), patch(
+            "src.graph.flow.ApplyAndRunTestsAgent", StubApplyAndRunTestsAgent
         ):
             graph = build_devflow_graph()
             result = graph.invoke({"original_requirement": "实现用户登录、注册和鉴权"})
@@ -78,6 +109,7 @@ class DevFlowGraphTest(unittest.TestCase):
         self.assertIn("design_doc", result)
         self.assertIn("diff_patch", result)
         self.assertIn("test_results", result)
+        self.assertIn("test_run_results", result)
         self.assertIn("review_report", result)
         self.assertIn("delivery_status", result)
         self.assertEqual(result["error_logs"], [])

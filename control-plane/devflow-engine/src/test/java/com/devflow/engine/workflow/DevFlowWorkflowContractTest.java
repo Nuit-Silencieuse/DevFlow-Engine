@@ -42,6 +42,7 @@ class DevFlowWorkflowContractTest {
             "designSystem",
             "generateCode",
             "generateTests",
+            "applyAndRunTests",
             "reviewCode",
             "integrateDelivery"
         );
@@ -56,6 +57,7 @@ class DevFlowWorkflowContractTest {
             "designSystem",
             "generateCode",
             "generateTests",
+            "applyAndRunTests",
             "reviewCode",
             "integrateDelivery"
         );

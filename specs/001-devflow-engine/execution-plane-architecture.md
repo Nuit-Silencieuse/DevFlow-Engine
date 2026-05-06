@@ -232,7 +232,8 @@ result_state = run_stage("SYSTEM_DESIGN", state)
 | `analyze_requirement_node` | `structured_prd`, `code_context`, `current_step`, `error_logs` | 已调用 T022 Requirement Agent，通过 LLM Client 生成结构化 PRD，并记录上下文证据 |
 | `design_system_node` | `design_doc`, `current_step`, `error_logs` | 读取 `structured_prd` 和 `human_feedback`，生成设计占位文档，等待 T023 Design Agent |
 | `generate_code_node` | `diff_patch`, `code_generation_report`, `current_step`, `error_logs` | 已调用 T024 CoderAgent，通过 LLM Client 生成可审查 unified diff，不直接写文件或提交 Git |
-| `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 写入测试生成占位状态，等待 T025 Test Agent |
+| `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 已调用 T025 TestAgent，通过 LLM Client 生成测试补丁、测试命令和执行结果记录 |
+| `apply_and_run_tests_node` | `test_run_results`, `current_step`, `error_logs` | 当前不启用沙箱执行，只返回人工应用补丁和手动运行测试的结构化操作要求 |
 | `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T026 Review Agent |
 | `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T027 Delivery Agent |
 
@@ -436,7 +437,8 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 - T022: 已将 `analyze_requirement_node` 替换为需求分析 Agent。
 - T023: 已将 `design_system_node` 替换为系统设计 Agent。
 - T024: 已将 `generate_code_node` 替换为代码生成 Agent。
-- T025: 将 `generate_tests_node` 替换为测试生成 Agent。
+- T025: 已将 `generate_tests_node` 替换为测试生成 Agent。
+- T025-S: 已新增 `APPLY_AND_RUN_TESTS` 阶段，作为暂不启用沙箱时的人工应用补丁和测试执行边界。
 - T026: 将 `review_code_node` 替换为代码评审 Agent。
 - T027: 将 `integrate_delivery_node` 替换为交付集成 Agent。
 - T028: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。
@@ -518,6 +520,52 @@ DesignAgent 在以下位置输出 warning，方便本地调试和真实 LLM 调�
 流水线控制台在 `CODE_GENERATION` 阶段只把 `diff_patch` 作为核心阶段产物。`sandbox/frontend/src/viewModel.ts` 会解析 unified diff，按文件展示新增/删除行统计和预览片段，并保留原始 diff 供展开查看。这样前端不需要理解完整代码生成报告，也不会把 `design_doc`、`structured_prd` 等上游大 JSON 混在代码审查界面里。
 
 当前实现仍然是“生成补丁”阶段，不是“应用补丁”阶段。是否把 diff 应用到工作区、是否运行测试、是否允许提交 Git，都应交给后续沙箱执行、测试生成和人工审批流程控制。
+
+## T025 TestAgent 子图实现
+
+`execution-plane/src/agents/test_agent.py` 承载 `TEST_GENERATION` 阶段的真实业务逻辑。它消费 `diff_patch`、`design_doc`、`structured_prd`、`code_context` 和人工反馈，生成测试补丁 `test_diff_patch`、测试文件计划、测试命令和执行结果记录。当前阶段不会直接把测试补丁写入工作区，也不会在 Agent 内执行 shell 命令；如果补丁尚未应用，`execution_results.status` 必须显式为 `NOT_RUN`，避免前端和人工检查点误以为测试已经通过。
+
+### 子图节点
+
+| 节点 | 作用 |
+|------|------|
+| `prepare_input` | 校验 `diff_patch` 是否存在，提取设计文档、代码上下文、代码生成报告和人工反馈，并推断输出语言。 |
+| `plan_tests` | 从代码 diff、PRD 验收条件、设计文档中的 `test_strategy` 和变更文件推断测试关注点与候选命令。 |
+| `draft_test_results` | 调用 `LlmClient.complete_json(task="test_generation")`，要求模型返回测试补丁、测试文件、测试命令和执行结果。 |
+| `validate_test_results` | 校验 `test_diff_patch` 是否为 unified diff，且至少包含测试文件、测试命令和执行结果记录。 |
+| `repair_test_results` | 只处理 Markdown fenced diff 等格式外壳，不根据规则臆造测试代码。 |
+| `finalize` | 写入 `test_results`，并把产物索引追加到 `pipeline_context.artifact_index.TEST_GENERATION`。 |
+| `fail_soft` | 缺少 `diff_patch` 或测试产物不可用时返回阻塞态 `test_results`，阻止后续评审误用。 |
+
+### 产物结构
+
+`test_results` 包含：
+
+- `status`: `GENERATED`、`BLOCKED`、`NOT_RUN` 等阶段状态。
+- `summary`: 测试生成摘要。
+- `test_diff_patch`: 只包含测试文件或测试辅助文件变更的 unified diff。
+- `test_files`: 测试文件列表，包含路径、框架、用途和断言关注点。
+- `test_commands`: 建议后续沙箱执行的测试命令及目的。
+- `execution_results`: 命令执行记录；没有真实执行时必须写 `NOT_RUN` 和原因。
+- `coverage_focus`、`risks`、`open_questions`、`quality`、`source`。
+
+### 前端展示
+
+流水线控制台在 `TEST_GENERATION` 阶段只选择 `test_results` 作为核心产物。前端会从 `test_results.test_diff_patch` 解析完整 unified diff，用和代码生成阶段一致的方式展示测试代码变更；同时把 `test_files`、`test_commands` 和 `execution_results` 分开展示，让用户同时看到“生成了哪些测试代码”和“这些测试是否已经运行、运行结果是什么”。这样比只展示一段 JSON 更适合人工检查点审阅。
+
+## T025-S ApplyAndRunTestsAgent 人工执行边界
+
+`execution-plane/src/agents/apply_and_run_tests_agent.py` 是 TestAgent 拆分后的第二个阶段。由于当前明确暂不实现沙箱，它不会应用补丁、不会写文件、不会执行测试命令，而是把 `test_run_results.status` 写为 `MANUAL_ACTION_REQUIRED`。
+
+该阶段输出:
+
+- `apply_strategy = MANUAL_AFTER_REVIEW`
+- `required_approvals = ["CODE_GENERATION", "TEST_GENERATION"]`
+- `manual_steps`: 用户需要按顺序完成的人工动作。
+- `test_commands`: 从 `test_results` 继承的建议测试命令。
+- `execution_results`: 每条命令默认记录为 `NOT_RUN`，并说明“当前阶段未启用沙箱执行”。
+
+控制平面默认把 `CODE_GENERATION` 和 `TEST_GENERATION` 标记为人工检查点。Workflow 在这两个阶段完成 Activity 后会进入 `SUSPENDED`，等待用户 Approve/Reject。Reject 会把反馈写入 `globalContext.human_feedback` 并重新执行对应阶段；Approve 后才继续进入下一个阶段。
 
 ## 代码库上下文工具
 
@@ -624,3 +672,15 @@ RequirementAgent 的 Activity 输出同时保留蛇形命名和前端友好的�
 ### 安全边界
 
 所有路径读取都先解析到 `rootPath` 内，任何目录逃逸都会被拒绝。默认排除规则覆盖 `.git`、依赖目录、构建产物、缓存、日志、`.env*`、`*secret*` 等敏感或低价值路径。`excludePaths` 优先级高于 `targetFiles`，用于用户主动限制范围、保护隐私或提升速度。`privacyMode=strict` 时 evidence 中只保留定位信息和摘要，不写入原始代码片段。
+## APPLY_AND_RUN_TESTS 最新执行语义
+
+当前实现已经从“人工执行边界”升级为“自动应用代码并运行测试”阶段：
+
+- `TEST_GENERATION` 只产出测试补丁和测试命令，不再把真实测试结果写入 `test_results`。
+- `APPLY_AND_RUN_TESTS` 从 `repository_context.rootPath`、`code_context.root_path` 或 `pipeline_context.latest_code_context.root_path` 定位目标仓库。
+- 该阶段按顺序对 `diff_patch` 和 `test_results.test_diff_patch` 执行 `git apply --whitespace=nowarn -`。应用失败会立即返回 `FAILED`，不会继续运行测试命令。
+- 补丁应用成功后，按 `test_results.test_commands` 逐条执行测试命令，并把退出码、stdout、stderr、耗时写入 `test_run_results.execution_results`。
+- 测试执行失败属于业务结果，不抛出 Activity 异常；阶段输出 `test_run_results.status = FAILED`，并把错误摘要写入 `errors`，便于前端展示。
+- 为降低误执行风险，命令解析拒绝包含 `&&`、`||`、`;`、`|`、重定向等 shell 控制符的复合命令。Windows 下会把 `npm`、`npx`、`mvn`、`gradle` 映射为对应 `.cmd`/`.bat` 可执行文件。
+
+流水线控制台中，该阶段中文显示名为“应用代码并运行测试”，默认排在“测试生成”之后。前端只在 `APPLY_AND_RUN_TESTS` 阶段展示真实执行结果；`TEST_GENERATION` 阶段重点展示测试 diff、测试文件计划和命令计划。

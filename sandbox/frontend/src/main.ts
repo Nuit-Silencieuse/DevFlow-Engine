@@ -175,14 +175,23 @@ const checkpointOutput = mustGet<HTMLPreElement>("checkpointOutput");
 const stageOptions = mustGet<HTMLDivElement>("stageOptions");
 
 stageOptions.replaceChildren(
-  ...STAGE_OPTIONS.map((stage) => {
+  ...[...STAGE_OPTIONS].sort((left, right) => stageOptionOrder(left.name) - stageOptionOrder(right.name)).map((stage) => {
     const label = document.createElement("label");
     label.className = "check-option";
     const checked = DEFAULT_STAGE_NAMES.includes(stage.name);
-    label.innerHTML = `<input type="checkbox" name="stages" value="${stage.name}" ${checked ? "checked" : ""} /> <span>${stage.label}</span>`;
+    label.innerHTML = `<input type="checkbox" name="stages" value="${stage.name}" ${checked ? "checked" : ""} /> <span>${stageLabel(stage.name)}</span>`;
     return label;
   }),
 );
+
+function stageOptionOrder(stageName: string): number {
+  const defaultIndex = DEFAULT_STAGE_NAMES.indexOf(stageName);
+  if (defaultIndex >= 0) {
+    return defaultIndex;
+  }
+  const optionIndex = STAGE_OPTIONS.findIndex((stage) => stage.name === stageName);
+  return DEFAULT_STAGE_NAMES.length + (optionIndex >= 0 ? optionIndex : 999);
+}
 
 createForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -391,12 +400,17 @@ function renderStageArtifact(stage: StageStatusResponse | null): void {
   if (isCodeDiffArtifact) {
     artifactOutput.append(renderDiffFiles(parseUnifiedDiffForDisplay(diffText)));
   }
+  const testDiffText = readTestDiffPatch(view.raw);
+  const isTestResultArtifact = testDiffText !== null && (view.sourceKey === "test_results" || view.sourceKey === "testResults");
+  if (isTestResultArtifact) {
+    artifactOutput.append(renderDiffFiles(parseUnifiedDiffForDisplay(testDiffText), "测试代码 Diff"));
+  }
 
   const visibleSections = isCodeDiffArtifact
     ? view.sections.filter((section) => !section.title.includes("Diff"))
     : view.sections;
 
-  if (visibleSections.length === 0 && !isCodeDiffArtifact) {
+  if (visibleSections.length === 0 && !isCodeDiffArtifact && !isTestResultArtifact) {
     const empty = document.createElement("p");
     empty.className = "empty-text";
     empty.textContent = "该核心产物暂无可展开字段。";
@@ -440,10 +454,10 @@ function renderField(label: string, value: string): HTMLElement {
   return row;
 }
 
-function renderDiffFiles(files: CodeDiffFile[]): HTMLElement {
+function renderDiffFiles(files: CodeDiffFile[], title = "Diff 文件"): HTMLElement {
   const section = document.createElement("section");
   section.className = "artifact-section diff-section";
-  section.append(sectionTitle("Diff 文件"));
+  section.append(sectionTitle(title));
 
   if (files.length === 0) {
     const empty = document.createElement("p");
@@ -476,6 +490,15 @@ function renderDiffFiles(files: CodeDiffFile[]): HTMLElement {
     section.append(fileBlock);
   }
   return section;
+}
+
+function readTestDiffPatch(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const value = record.test_diff_patch ?? record.testDiffPatch;
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function renderCodeContext(stage: StageStatusResponse | null): void {

@@ -15,9 +15,12 @@ class DevFlowWorkflowImplTest {
     @Test
     void startRunsRequirementDesignAndCodeGenerationActivities() {
         FakeActivities activities = new FakeActivities();
-        DevFlowWorkflowImpl workflow = new TestableWorkflow(
+        TestableWorkflow workflow = new TestableWorkflow(
             activities,
-            List.of(new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.APPROVE, null))
+            List.of(
+                new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_GENERATION", CheckpointDecision.APPROVE, null)
+            )
         );
 
         DevFlowWorkflowResult result = workflow.start(input());
@@ -33,13 +36,45 @@ class DevFlowWorkflowImplTest {
     }
 
     @Test
+    void codeAndTestGenerationRequireHumanApprovalBeforeContinuing() {
+        FakeActivities activities = new FakeActivities();
+        TestableWorkflow workflow = new TestableWorkflow(
+            activities,
+            List.of(
+                new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_GENERATION", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "TEST_GENERATION", CheckpointDecision.APPROVE, null)
+            )
+        );
+
+        DevFlowWorkflowResult result = workflow.start(new DevFlowWorkflowInput(
+            UUID.fromString("00000000-0000-0000-0000-000000000001"),
+            "Add auth",
+            "实现登录注册",
+            List.of("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION", "TEST_GENERATION", "APPLY_AND_RUN_TESTS"),
+            new LinkedHashMap<>()
+        ));
+
+        assertThat(activities.calls).containsExactly(
+            "REQUIREMENT_ANALYSIS",
+            "SYSTEM_DESIGN",
+            "CODE_GENERATION",
+            "TEST_GENERATION",
+            "APPLY_AND_RUN_TESTS"
+        );
+        assertThat(workflow.decisionsSeen).containsExactly("SYSTEM_DESIGN", "CODE_GENERATION", "TEST_GENERATION");
+        assertThat(result.currentStage()).isEqualTo("APPLY_AND_RUN_TESTS");
+    }
+
+    @Test
     void rejectedSystemDesignInjectsFeedbackAndRerunsDesignBeforeCodeGeneration() {
         FakeActivities activities = new FakeActivities();
         DevFlowWorkflowImpl workflow = new TestableWorkflow(
             activities,
             List.of(
                 new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.REJECT, "补充数据库表结构"),
-                new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.APPROVE, null)
+                new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_GENERATION", CheckpointDecision.APPROVE, null)
             )
         );
 
@@ -69,6 +104,7 @@ class DevFlowWorkflowImplTest {
 
     private static class TestableWorkflow extends DevFlowWorkflowImpl {
         private final Queue<CheckpointSignal> decisions;
+        private final List<String> decisionsSeen = new ArrayList<>();
 
         TestableWorkflow(DevFlowActivities activities, List<CheckpointSignal> decisions) {
             super(activities);
@@ -77,6 +113,7 @@ class DevFlowWorkflowImplTest {
 
         @Override
         protected CheckpointSignal waitForCheckpointDecision(String stageName) {
+            decisionsSeen.add(stageName);
             return decisions.remove();
         }
     }
@@ -103,6 +140,11 @@ class DevFlowWorkflowImplTest {
         @Override
         public StageExecutionResult generateTests(StageExecutionRequest request) {
             return execute("TEST_GENERATION", request);
+        }
+
+        @Override
+        public StageExecutionResult applyAndRunTests(StageExecutionRequest request) {
+            return execute("APPLY_AND_RUN_TESTS", request);
         }
 
         @Override

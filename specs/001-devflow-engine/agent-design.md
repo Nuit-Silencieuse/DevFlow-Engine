@@ -24,6 +24,7 @@
 | `SYSTEM_DESIGN` | Design Agent | `structured_prd`, `code_context`, `human_feedback` | `design_doc` |
 | `CODE_GENERATION` | Coder Agent | `design_doc`, `structured_prd`, `code_context` | `diff_patch` |
 | `TEST_GENERATION` | Test Agent | `diff_patch`, `design_doc`, `code_context` | `test_results` |
+| `APPLY_AND_RUN_TESTS` | ApplyAndRunTests Agent | `diff_patch`, `test_results` | `test_run_results` |
 | `CODE_REVIEW` | Review Agent | `diff_patch`, `test_results`, `design_doc` | `review_report` |
 | `DELIVERY_INTEGRATION` | Delivery Agent | `review_report`, `test_results`, `diff_patch` | `delivery_status` |
 
@@ -397,10 +398,139 @@ Prompt 与校验约束:
 职责:
 
 - 根据 `diff_patch`、`design_doc` 和验收标准生成或更新测试。
-- 规划测试命令。
-- 在允许的环境中运行测试并汇总结论。
+- 规划测试命令，并说明每条命令验证的行为。
+- 记录执行结果；如果测试补丁尚未应用或当前阶段没有真实执行权限，必须显式返回 `NOT_RUN`，不能伪造通过结果。
 
-输出写入 `test_results`，其中必须包含测试状态、命令、摘要和失败详情。
+实现状态:
+
+T025 已新增 `TestAgent`，并将 `flow.py` 的 `generate_tests_node` 从占位文本替换为 `TestAgent().run(state)`。
+
+子图节点顺序:
+
+```text
+prepare_input
+  -> plan_tests
+  -> draft_test_results
+  -> validate_test_results
+  -> repair_test_results?  # 只修复 Markdown fenced diff 等格式外壳
+  -> finalize
+
+prepare_input invalid -> fail_soft
+validate_test_results invalid 且不可修复 -> fail_soft
+```
+
+输入:
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `diff_patch` | 是 | CoderAgent 输出的代码 unified diff，是测试生成的直接依据 |
+| `design_doc` | 否 | 设计文档与测试策略，用于补充测试边界 |
+| `structured_prd` | 否 | 验收条件和用户故事，用于确认测试覆盖行为 |
+| `code_generation_report` | 否 | 变更文件列表和代码生成质量信息 |
+| `code_context` | 否 | 上游代码证据摘要 |
+| `human_feedback` | 否 | 人工反馈，会进入测试生成 prompt |
+
+输出写入 `test_results`:
+
+```json
+{
+  "status": "GENERATED",
+  "summary": "测试生成摘要",
+  "test_diff_patch": "unified diff 文本，仅包含测试文件或测试辅助文件",
+  "test_files": [
+    {
+      "path": "测试文件路径",
+      "framework": "pytest|unittest|JUnit|vitest|...",
+      "purpose": "该测试文件验证什么",
+      "assertions": ["关键断言"]
+    }
+  ],
+  "test_commands": [
+    {
+      "command": "测试命令",
+      "purpose": "命令用途",
+      "expected_result": "预期结果"
+    }
+  ],
+  "execution_results": [
+    {
+      "command": "测试命令",
+      "status": "PASSED|FAILED|NOT_RUN",
+      "exit_code": 0,
+      "stdout": "标准输出",
+      "stderr": "失败或未执行原因"
+    }
+  ],
+  "coverage_focus": [],
+  "risks": [],
+  "open_questions": [],
+  "quality": {},
+  "source": "test_agent"
+}
+```
+
+Prompt 与校验约束:
+
+- `test_diff_patch` 必须是 unified diff，不使用 JSON Patch。
+- Prompt 明确禁止写文件、执行 shell 命令、伪造测试已经运行。
+- 如果补丁尚未应用，`execution_results.status` 必须是 `NOT_RUN`，并在 `stderr` 或摘要中解释原因。
+- 测试文件应优先覆盖 `diff_patch` 修改的行为和 `structured_prd.acceptance_criteria`。
+- 校验要求测试补丁、测试文件、测试命令和执行结果记录都存在；缺失时先做有限格式修复，仍不可用则返回 `BLOCKED`。
+
+前端展示:
+
+- 流水线控制台在 `TEST_GENERATION` 阶段只选择 `test_results` 作为核心产物。
+- 前端从 `test_results.test_diff_patch` 中解析完整测试代码 diff，用绿色/红色行背景展示新增和删除。
+- `test_files`、`test_commands`、`execution_results` 会作为结构化卡片展示，方便同时审查“生成了什么测试”和“测试是否运行、失败在哪里”。
+
+### 人工检查与测试执行拆分
+
+当前暂不引入沙箱，因此 `TEST_GENERATION` 不再承担“应用补丁并真实运行测试”的职责。流水线拆分为两个边界：
+
+1. `TEST_GENERATION`: 只生成测试补丁、测试命令和 `NOT_RUN` 执行记录，默认需要人工审批。
+2. `APPLY_AND_RUN_TESTS`: 独立 Agent 阶段，当前返回 `MANUAL_ACTION_REQUIRED`，提示用户在人工审查通过后手动应用 `diff_patch` 与 `test_diff_patch`，再在本机运行测试命令。
+
+控制平面默认要求 `CODE_GENERATION` 和 `TEST_GENERATION` 进入人工检查点。这样用户必须先审查代码 diff，再审查测试 diff；只有两个补丁都被确认后，才进入后续“应用并运行测试”的边界。由于暂未启用沙箱，`APPLY_AND_RUN_TESTS` 不直接执行命令，也不修改工作区。
+
+### 自动应用代码并运行测试
+
+最新设计中，测试相关产物按阶段拆分如下：
+
+- `TEST_GENERATION`: 只负责生成 `test_results`，包括 `test_diff_patch`、`test_files`、`test_commands`、`coverage_focus`、`risks` 和 `open_questions`。该阶段不再要求 LLM 输出 `execution_results`，也不在工作区写文件或执行 shell 命令。
+- `APPLY_AND_RUN_TESTS`: 阶段中文名为“应用代码并运行测试”。该阶段在 `CODE_GENERATION` 与 `TEST_GENERATION` 的人工检查点通过之后，无感知地在目标仓库中执行 `git apply`，依次应用 `diff_patch` 和 `test_results.test_diff_patch`，然后运行 `test_results.test_commands`。
+- 真实测试执行结果只写入 `test_run_results.execution_results`。如果补丁应用失败、命令无法解析、测试命令不存在、命令超时或退出码非 0，`test_run_results.status` 会变为 `FAILED` 或 `BLOCKED`，并在 `errors` 中记录 stderr/stdout 摘要。
+
+`test_run_results` 的核心结构：
+
+```json
+{
+  "status": "PASSED | FAILED | BLOCKED",
+  "summary": "补丁应用与测试执行摘要",
+  "repository_root": "目标仓库根目录",
+  "apply_strategy": "AUTO_APPLY_APPROVED_DIFFS",
+  "applied_patches": [
+    {
+      "name": "code_diff | test_diff",
+      "status": "APPLIED | SKIPPED | FAILED",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "test_commands": [],
+  "execution_results": [
+    {
+      "command": "python -m unittest discover -s tests",
+      "status": "PASSED | FAILED | BLOCKED",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "duration_ms": 1234
+    }
+  ],
+  "errors": []
+}
+```
 
 ## T026: Review Agent
 

@@ -56,7 +56,7 @@ description: "基于设计制品生成的开发任务列表"
 - [x] T022 [US1] 实现负责需求分析的 Agent 节点逻辑 (`execution-plane/src/agents/requirement_agent.py`)
 - [x] T023 [US1] 实现负责方案设计的 Agent 节点逻辑 (`execution-plane/src/agents/design_agent.py`)
 - [x] T024 [US1] 实现负责代码生成的 Agent 节点逻辑 (`execution-plane/src/agents/coder_agent.py`)
-- [ ] T025 [US1] 实现负责测试生成的 Agent 节点逻辑 (`execution-plane/src/agents/test_agent.py`)
+- [x] T025 [US1] 实现负责测试生成的 Agent 节点逻辑 (`execution-plane/src/agents/test_agent.py`)，并拆分出 `APPLY_AND_RUN_TESTS` 人工执行边界
 - [ ] T026 [US1] 实现负责代码评审的 Agent 节点逻辑 (`execution-plane/src/agents/review_agent.py`)
 - [ ] T027 [US1] 实现负责交付集成的 Agent 节点逻辑 (`execution-plane/src/agents/delivery_agent.py`)
 - [ ] T028 [US1] 集成 Checkpointer 支持 LangGraph 图状态的回溯和人工反馈注入

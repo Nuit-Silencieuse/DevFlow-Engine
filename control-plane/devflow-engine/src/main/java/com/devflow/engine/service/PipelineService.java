@@ -41,7 +41,9 @@ public class PipelineService {
     private static final List<String> DEFAULT_STAGES = List.of(
         "REQUIREMENT_ANALYSIS",
         "SYSTEM_DESIGN",
-        "CODE_GENERATION"
+        "CODE_GENERATION",
+        "TEST_GENERATION",
+        "APPLY_AND_RUN_TESTS"
     );
 
     private final PipelineRepository pipelineRepository;
@@ -134,8 +136,14 @@ public class PipelineService {
 
     static Stage createStage(String stageName) {
         Stage stage = new Stage(stageName, agentRole(stageName));
-        stage.setRequiresHumanApproval("SYSTEM_DESIGN".equals(stageName));
+        stage.setRequiresHumanApproval(requiresHumanApproval(stageName));
         return stage;
+    }
+
+    private static boolean requiresHumanApproval(String stageName) {
+        return "SYSTEM_DESIGN".equals(stageName)
+            || "CODE_GENERATION".equals(stageName)
+            || "TEST_GENERATION".equals(stageName);
     }
 
     private void synchronizeWorkflowSnapshot(Pipeline pipeline) {
@@ -402,6 +410,7 @@ public class PipelineService {
             case "SYSTEM_DESIGN" -> "design_agent";
             case "CODE_GENERATION" -> "coder_agent";
             case "TEST_GENERATION" -> "test_agent";
+            case "APPLY_AND_RUN_TESTS" -> "apply_and_run_tests_agent";
             case "CODE_REVIEW" -> "review_agent";
             case "DELIVERY_INTEGRATION" -> "delivery_agent";
             default -> "generic_agent";

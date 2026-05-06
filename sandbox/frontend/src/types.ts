@@ -3,6 +3,7 @@ export type StageName =
   | "SYSTEM_DESIGN"
   | "CODE_GENERATION"
   | "TEST_GENERATION"
+  | "APPLY_AND_RUN_TESTS"
   | "CODE_REVIEW"
   | "DELIVERY_INTEGRATION";
 

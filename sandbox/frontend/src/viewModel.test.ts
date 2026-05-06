@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import {
   buildCreatePipelineRequest,
   buildCodeContextViewModel,
@@ -27,7 +27,13 @@ function testBuildCreateRequestOmitsEmptyRepository(): void {
 
   assert.equal(request.name, "新需求");
   assert.equal(request.requirement, "请生成方案");
-  assert.deepEqual(request.stages, ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"]);
+  assert.deepEqual(request.stages, [
+    "REQUIREMENT_ANALYSIS",
+    "SYSTEM_DESIGN",
+    "CODE_GENERATION",
+    "TEST_GENERATION",
+    "APPLY_AND_RUN_TESTS",
+  ]);
   assert.equal("repository" in request, false);
 }
 
@@ -79,6 +85,7 @@ function testFormattingHelpers(): void {
   assert.deepEqual(parsePathList("src, README.md\npackage.json"), ["src", "README.md", "package.json"]);
   assert.equal(stageLabel("CODE_REVIEW"), "代码评审");
   assert.equal(statusTone("FAILED"), "danger");
+  assert.equal(stageLabel("APPLY_AND_RUN_TESTS"), "应用代码并运行测试");
   assert.match(formatJson({ a: 1 }), /"a": 1/);
 }
 
@@ -217,6 +224,64 @@ function testParseUnifiedDiffForDisplayKeepsFullDiff(): void {
   assert.equal(files[0].lines.find((line) => line.text === "-old line")?.type, "delete");
 }
 
+function testBuildTestGenerationArtifactShowsCodeAndExecutionResults(): void {
+  const view = buildStageArtifactViewModel({
+    name: "TEST_GENERATION",
+    status: "COMPLETED",
+    requiresHumanApproval: true,
+    output: {
+      diff_patch: "diff should not be the selected test artifact",
+      test_results: {
+        status: "GENERATED",
+        summary: "生成 TestAgent 单元测试",
+        test_diff_patch:
+          "diff --git a/tests/test_agent.py b/tests/test_agent.py\n" +
+          "--- a/tests/test_agent.py\n" +
+          "+++ b/tests/test_agent.py\n" +
+          "@@ -0,0 +1,2 @@\n" +
+          "+def test_agent():\n" +
+          "+    assert True\n",
+        test_files: [{ path: "tests/test_agent.py", framework: "pytest", purpose: "验证 Agent" }],
+        test_commands: [{ command: "pytest tests/test_agent.py", purpose: "运行测试" }],
+        execution_results: [{ command: "pytest tests/test_agent.py", status: "NOT_RUN", stderr: "补丁尚未应用" }],
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "test_results");
+  assert.equal(view?.title, "测试生成结果");
+  assert.equal(view?.sections.some((section) => section.title === "测试文件"), true);
+  assert.equal(view?.sections.some((section) => section.title === "鎵ц缁撴灉"), false);
+  assert.equal(JSON.stringify(view).includes("NOT_RUN"), false);
+  assert.equal(JSON.stringify(view).includes("tests/test_agent.py"), true);
+  assert.equal(JSON.stringify(view).includes("diff should not be the selected test artifact"), false);
+}
+
+function testBuildApplyAndRunTestsArtifactShowsManualAction(): void {
+  const view = buildStageArtifactViewModel({
+    name: "APPLY_AND_RUN_TESTS",
+    status: "COMPLETED",
+    requiresHumanApproval: false,
+    output: {
+      test_run_results: {
+        status: "FAILED",
+        summary: "等待人工应用补丁并运行测试",
+        apply_strategy: "AUTO_APPLY_APPROVED_DIFFS",
+        manual_steps: ["审查代码 diff", "审查测试 diff", "手动运行测试命令"],
+        test_commands: [{ command: "python -m unittest discover -s tests", purpose: "运行后端测试" }],
+        execution_results: [{ command: "python -m unittest discover -s tests", status: "FAILED", stderr: "boom" }],
+        errors: ["boom"],
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "test_run_results");
+  assert.equal(view?.title, "测试执行状态");
+  assert.equal(view?.sections.some((section) => section.title === "人工步骤"), true);
+  assert.equal(JSON.stringify(view).includes("FAILED"), true);
+  assert.equal(JSON.stringify(view).includes("boom"), true);
+}
+
 function main(): void {
   testBuildCreateRequestOmitsEmptyRepository();
   testBuildCreateRequestNormalizesRepositoryContext();
@@ -227,6 +292,9 @@ function main(): void {
   testBuildDesignArtifactShowsOnlyDesignDoc();
   testBuildCodeGenerationArtifactShowsDiffByFile();
   testParseUnifiedDiffForDisplayKeepsFullDiff();
+  testBuildTestGenerationArtifactShowsCodeAndExecutionResults();
+  testBuildApplyAndRunTestsArtifactShowsManualAction();
 }
 
 main();
+

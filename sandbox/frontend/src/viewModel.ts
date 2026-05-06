@@ -11,6 +11,7 @@ import type {
 } from "./types";
 
 export const STAGE_OPTIONS = [
+  { name: "APPLY_AND_RUN_TESTS", label: "应用并运行测试" },
   { name: "REQUIREMENT_ANALYSIS", label: "需求分析" },
   { name: "SYSTEM_DESIGN", label: "方案设计" },
   { name: "CODE_GENERATION", label: "代码生成" },
@@ -19,7 +20,13 @@ export const STAGE_OPTIONS = [
   { name: "DELIVERY_INTEGRATION", label: "交付集成" },
 ] as const;
 
-export const DEFAULT_STAGE_NAMES = ["REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"];
+export const DEFAULT_STAGE_NAMES = [
+  "REQUIREMENT_ANALYSIS",
+  "SYSTEM_DESIGN",
+  "CODE_GENERATION",
+  "TEST_GENERATION",
+  "APPLY_AND_RUN_TESTS",
+];
 
 export interface PipelineFormValues {
   name: string;
@@ -108,6 +115,9 @@ export function formatJson(value: unknown): string {
 }
 
 export function stageLabel(stageName: string): string {
+  if (stageName === "APPLY_AND_RUN_TESTS") {
+    return "应用代码并运行测试";
+  }
   return STAGE_OPTIONS.find((stage) => stage.name === stageName)?.label ?? stageName;
 }
 
@@ -176,6 +186,8 @@ export interface StageArtifactViewModel {
 const REQUIREMENT_ARTIFACT_KEYS = ["structured_prd", "structuredPrd"];
 const DESIGN_ARTIFACT_KEYS = ["design_doc", "designDoc"];
 const CODE_ARTIFACT_KEYS = ["diff_patch", "diffPatch"];
+const TEST_ARTIFACT_KEYS = ["test_results", "testResults"];
+const TEST_RUN_ARTIFACT_KEYS = ["test_run_results", "testRunResults"];
 
 export function buildStageArtifactViewModel(stage: StageStatusResponse | null): StageArtifactViewModel | null {
   if (!stage) {
@@ -203,6 +215,12 @@ export function buildStageArtifactViewModel(stage: StageStatusResponse | null): 
   if (stage.name === "CODE_GENERATION") {
     return buildCodeGenerationArtifact(selected.key, selected.value, stage.output);
   }
+  if (stage.name === "TEST_GENERATION") {
+    return buildTestGenerationArtifact(selected.key, selected.value);
+  }
+  if (stage.name === "APPLY_AND_RUN_TESTS") {
+    return buildTestRunArtifact(selected.key, selected.value);
+  }
   return buildGenericArtifact(stageLabel(stage.name), selected.key, selected.value);
 }
 
@@ -215,6 +233,10 @@ function selectCoreArtifact(stage: StageStatusResponse): { key: string; value: u
         ? DESIGN_ARTIFACT_KEYS
         : stage.name === "CODE_GENERATION"
           ? CODE_ARTIFACT_KEYS
+          : stage.name === "TEST_GENERATION"
+            ? TEST_ARTIFACT_KEYS
+            : stage.name === "APPLY_AND_RUN_TESTS"
+              ? TEST_RUN_ARTIFACT_KEYS
         : [];
 
   for (const key of preferredKeys) {
@@ -224,7 +246,13 @@ function selectCoreArtifact(stage: StageStatusResponse): { key: string; value: u
     }
   }
 
-  if (stage.name === "REQUIREMENT_ANALYSIS" || stage.name === "SYSTEM_DESIGN" || stage.name === "CODE_GENERATION") {
+  if (
+    stage.name === "REQUIREMENT_ANALYSIS" ||
+    stage.name === "SYSTEM_DESIGN" ||
+    stage.name === "CODE_GENERATION" ||
+    stage.name === "TEST_GENERATION" ||
+    stage.name === "APPLY_AND_RUN_TESTS"
+  ) {
     return null;
   }
   return Object.keys(output).length > 0 ? { key: "output", value: output } : null;
@@ -309,6 +337,58 @@ function buildCodeGenerationArtifact(
       objectListSection("生成报告", report),
     ]),
     raw: diffText,
+  };
+}
+
+function buildTestGenerationArtifact(sourceKey: string, value: unknown): StageArtifactViewModel {
+  const record: Record<string, unknown> = { ...asRecord(value), execution_results: undefined, executionResults: undefined };
+  const testDiff = String(record.test_diff_patch ?? record.testDiffPatch ?? "");
+  const diffFiles = parseUnifiedDiffForDisplay(testDiff);
+  const passedCount = 0;
+  const failedCount = 0;
+  return {
+    title: "测试生成结果",
+    sourceKey,
+    description: "展示测试生成阶段产出的测试代码 diff、测试文件计划和执行结果。测试补丁不会在控制台自动应用。",
+    summaryFields: compactFields([
+      ["状态", record.status],
+      ["摘要", record.summary],
+      ["测试文件数", String(normalizeDisplayArray(record.test_files ?? record.testFiles).length || diffFiles.length)],
+      ["测试命令数", String(normalizeDisplayArray(record.test_commands ?? record.testCommands).length)],
+      ["通过", passedCount ? String(passedCount) : undefined],
+      ["失败", failedCount ? String(failedCount) : undefined],
+    ]),
+    sections: compactSections([
+      objectListSection("测试文件", record.test_files ?? record.testFiles),
+      objectListSection("测试命令", record.test_commands ?? record.testCommands),
+      objectListSection("执行结果", record.execution_results ?? record.executionResults),
+      textListSection("覆盖重点", record.coverage_focus ?? record.coverageFocus),
+      textListSection("风险", record.risks),
+      textListSection("开放问题", record.open_questions ?? record.openQuestions),
+    ]),
+    raw: record,
+  };
+}
+
+function buildTestRunArtifact(sourceKey: string, value: unknown): StageArtifactViewModel {
+  const record = asRecord(value);
+  return {
+    title: "测试执行状态",
+    sourceKey,
+    description: "当前未启用沙箱执行。本阶段用于展示人工应用补丁、手动运行测试和回填真实结果的操作要求。",
+    summaryFields: compactFields([
+      ["状态", record.status],
+      ["摘要", record.summary],
+      ["应用策略", record.apply_strategy ?? record.applyStrategy],
+      ["命令数", String(normalizeDisplayArray(record.test_commands ?? record.testCommands).length)],
+    ]),
+    sections: compactSections([
+      textListSection("人工步骤", record.manual_steps ?? record.manualSteps),
+      objectListSection("测试命令", record.test_commands ?? record.testCommands),
+      objectListSection("执行结果", record.execution_results ?? record.executionResults),
+      textListSection("需要审批的阶段", record.required_approvals ?? record.requiredApprovals),
+    ]),
+    raw: value,
   };
 }
 
@@ -438,6 +518,15 @@ function compactFields(entries: Array<[string, unknown]>): DisplayField[] {
 
 function compactSections(sections: Array<DisplaySection | null>): DisplaySection[] {
   return sections.filter((section): section is DisplaySection => !!section && section.items.length > 0);
+}
+
+function normalizeDisplayArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => (isRecord(item) ? item : { value: item }))
+    .filter((item) => Object.keys(item).length > 0);
 }
 
 function normalizeDisplayFields(value: unknown): DisplayField[] {
