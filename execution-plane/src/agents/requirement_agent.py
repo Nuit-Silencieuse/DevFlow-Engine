@@ -20,6 +20,12 @@ from src.context import (
     search_text,
 )
 from src.llm import LlmClient, LlmMessage, LlmRequest
+from src.pipeline_context import (
+    append_stage_code_context,
+    context_pack_from_reused_code_context,
+    normalize_pipeline_context,
+    select_reusable_code_context,
+)
 
 if TYPE_CHECKING:
     from src.graph.state import DevFlowState
@@ -83,6 +89,7 @@ class RequirementAgent:
         devflow_state = state["devflow_state"]
         repository_payload = devflow_state.get("repository_context")
         existing_code_context = dict(devflow_state.get("code_context") or {})
+        pipeline_context = normalize_pipeline_context(devflow_state.get("pipeline_context"))
         if not repository_payload:
             return {
                 "context_pack": {
@@ -110,6 +117,23 @@ class RequirementAgent:
         request = RepositoryExplorationRequest.from_mapping(repository_payload)
         if request is None:
             return {"context_pack": {"status": "SKIPPED", "files": [], "inspected_files": [], "search_queries": []}}
+
+        # 渐进式披露不是 RequirementAgent 的私有缓存，而是整个流水线共享的上下文能力。
+        # 因此在真正调用 compact map / search / read 之前，先检查前序阶段是否已经留下
+        # 同一仓库、足够高置信度的代码证据。命中后直接复用，避免后续 Agent 重复消耗
+        # token、网络时间和文件 IO；未命中时才进入下面的增量探索路径。
+        reusable_code_context = select_reusable_code_context(pipeline_context, repository_payload)
+        if reusable_code_context:
+            context_pack = context_pack_from_reused_code_context(reusable_code_context)
+            self.llm_client.trace_recorder.record(
+                "requirement_agent.context_reuse",
+                {
+                    "source_stage": reusable_code_context.get("stage"),
+                    "inspected_files": reusable_code_context.get("inspected_files", []),
+                    "confidence": reusable_code_context.get("confidence", 0.0),
+                },
+            )
+            return {"context_pack": context_pack}
 
         context_pack = progressively_collect_context(
             request,
@@ -238,11 +262,19 @@ class RequirementAgent:
         }
         code_context_camel = code_context_to_camel(code_context)
         exploration_trace = list(context_pack.get("exploration_trace", []))
+        pipeline_context = append_stage_code_context(
+            normalize_pipeline_context((state.get("devflow_state") or {}).get("pipeline_context")),
+            stage=REQUIREMENT_ANALYSIS,
+            agent="requirement_agent",
+            code_context=code_context,
+            artifacts={"structured_prd": prd},
+        )
         return {
             "result": {
                 "structured_prd": prd,
                 "code_context": code_context,
                 "codeContext": code_context_camel,
+                "pipeline_context": pipeline_context,
                 "exploration_trace": exploration_trace,
                 "explorationTrace": exploration_trace,
                 "current_step": REQUIREMENT_ANALYSIS,
@@ -259,6 +291,13 @@ class RequirementAgent:
             "search_queries": [],
             "source": "requirement_agent",
         }
+        pipeline_context = append_stage_code_context(
+            normalize_pipeline_context((state.get("devflow_state") or {}).get("pipeline_context")),
+            stage=REQUIREMENT_ANALYSIS,
+            agent="requirement_agent",
+            code_context=code_context,
+            artifacts={},
+        )
         return {
             "result": {
                 "structured_prd": {
@@ -282,6 +321,7 @@ class RequirementAgent:
                 },
                 "code_context": code_context,
                 "codeContext": code_context_to_camel(code_context),
+                "pipeline_context": pipeline_context,
                 "exploration_trace": [],
                 "explorationTrace": [],
                 "current_step": REQUIREMENT_ANALYSIS,

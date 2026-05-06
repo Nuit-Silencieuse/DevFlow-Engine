@@ -5,7 +5,8 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from src.agents import RequirementAgent
+from src.agents import DesignAgent, RequirementAgent
+from src.pipeline_context import normalize_pipeline_context
 
 from .state import DevFlowState
 
@@ -34,21 +35,13 @@ def analyze_requirement_node(state: DevFlowState) -> DevFlowState:
 
 
 def design_system_node(state: DevFlowState) -> DevFlowState:
-    return {
-        "design_doc": {
-            "summary": "System design draft generated from structured PRD.",
-            "inputs": state.get("structured_prd", {}),
-            "feedback": state.get("human_feedback", ""),
-            "source": "placeholder_design_agent",
-        },
-        "current_step": SYSTEM_DESIGN,
-        "error_logs": state.get("error_logs", []),
-    }
+    return DesignAgent().run(state)
 
 
 def generate_code_node(state: DevFlowState) -> DevFlowState:
     return {
         "diff_patch": "Code generation is reserved for the coder agent implementation.",
+        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
         "current_step": CODE_GENERATION,
         "error_logs": state.get("error_logs", []),
     }
@@ -60,6 +53,7 @@ def generate_tests_node(state: DevFlowState) -> DevFlowState:
             "status": "PENDING",
             "summary": "Test generation is reserved for the test agent implementation.",
         },
+        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
         "current_step": TEST_GENERATION,
         "error_logs": state.get("error_logs", []),
     }
@@ -71,6 +65,7 @@ def review_code_node(state: DevFlowState) -> DevFlowState:
             "status": "PENDING",
             "summary": "Code review is reserved for the review agent implementation.",
         },
+        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
         "current_step": CODE_REVIEW,
         "error_logs": state.get("error_logs", []),
     }
@@ -82,6 +77,7 @@ def integrate_delivery_node(state: DevFlowState) -> DevFlowState:
             "status": "PENDING",
             "summary": "Delivery integration is reserved for the delivery agent implementation.",
         },
+        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
         "current_step": DELIVERY_INTEGRATION,
         "error_logs": state.get("error_logs", []),
     }
@@ -122,3 +118,4 @@ def run_stage(stage_name: str, state: DevFlowState) -> DevFlowState:
     merged: dict[str, Any] = dict(state)
     merged.update(updates)
     return merged
+

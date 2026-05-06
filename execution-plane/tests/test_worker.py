@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from src.workers.activities import analyze_requirement, registered_activities, _state_from_request
+from src.workers.activities import analyze_requirement, design_system, registered_activities, _state_from_request
 from src.workers.worker import TASK_QUEUE
 
 
@@ -15,6 +15,19 @@ class StubRequirementAgent:
             },
             "code_context": {"inspected_files": [], "search_queries": [], "source": "requirement_agent"},
             "current_step": "REQUIREMENT_ANALYSIS",
+            "error_logs": [],
+        }
+
+
+class StubDesignAgent:
+    def run(self, state):
+        return {
+            "design_doc": {
+                "summary": state["structured_prd"]["summary"],
+                "source": "design_agent",
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "SYSTEM_DESIGN",
             "error_logs": [],
         }
 
@@ -59,6 +72,32 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertIn("structured_prd", result["outputPayload"])
         self.assertIn("code_context", result["outputPayload"])
 
+    def test_design_activity_returns_design_doc_and_pipeline_context(self):
+        with patch("src.graph.flow.DesignAgent", StubDesignAgent):
+            result = asyncio.run(
+                design_system(
+                    {
+                        "pipelineId": "00000000-0000-0000-0000-000000000001",
+                        "stageName": "SYSTEM_DESIGN",
+                        "requirement": "设计控制台",
+                        "globalContext": {},
+                        "previousOutput": {
+                            "structured_prd": {"summary": "控制台需求"},
+                            "pipeline_context": {
+                                "version": 1,
+                                "code_contexts": [],
+                                "artifact_index": {},
+                            },
+                        },
+                    }
+                )
+            )
+
+        self.assertEqual(result["stageName"], "SYSTEM_DESIGN")
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["outputPayload"]["design_doc"]["source"], "design_agent")
+        self.assertIn("pipeline_context", result["outputPayload"])
+
     def test_state_from_request_exposes_repository_context_to_agents(self):
         state = _state_from_request(
             {
@@ -80,6 +119,31 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
 
         self.assertEqual(state["repository_context"]["rootPath"], "D:/projects/demo")
         self.assertEqual(state["code_context"]["inspected_files"], ["src/App.tsx"])
+
+    def test_state_from_request_preserves_shared_pipeline_context(self):
+        state = _state_from_request(
+            {
+                "requirement": "继续设计",
+                "globalContext": {},
+                "previousOutput": {
+                    "pipeline_context": {
+                        "version": 1,
+                        "code_contexts": [
+                            {
+                                "stage": "REQUIREMENT_ANALYSIS",
+                                "confidence": 0.86,
+                                "inspected_files": ["src/App.tsx"],
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            state["pipeline_context"]["code_contexts"][0]["inspected_files"],
+            ["src/App.tsx"],
+        )
 
 
 if __name__ == "__main__":

@@ -434,12 +434,57 @@ Java `DevFlowWorkflowImpl` 会把 `outputPayload` 作为下一阶段的 `previou
 - T020: 控制平面提供阶段产物落库和展示通道。
 - T021: 已实现可配置 LLM 调用客户端，支持至少两个 Provider、运行时切换和结构化 JSON 输出。
 - T022: 已将 `analyze_requirement_node` 替换为需求分析 Agent。
-- T023: 将 `design_system_node` 替换为系统设计 Agent。
+- T023: 已将 `design_system_node` 替换为系统设计 Agent。
 - T024: 将 `generate_code_node` 替换为代码生成 Agent。
 - T025: 将 `generate_tests_node` 替换为测试生成 Agent。
 - T026: 将 `review_code_node` 替换为代码评审 Agent。
 - T027: 将 `integrate_delivery_node` 替换为交付集成 Agent。
 - T028: 引入 Checkpointer，支持图状态持久化、回溯和人工反馈注入。
+
+## T023 DesignAgent 子图实现
+
+`execution-plane/src/agents/design_agent.py` 现在承载 `SYSTEM_DESIGN` 阶段的真实业务逻辑。它和 RequirementAgent 一样使用阶段内 LangGraph 子图，但不重新扫描代码库；它复用前序阶段写入的 `structured_prd`、`code_context` 和 `pipeline_context`，生成可供后续 CoderAgent 消费的 `design_doc`。
+
+### 子图节点
+
+| 节点 | 作用 |
+|------|------|
+| `prepare_input` | 读取 `structured_prd`、`code_context`、`pipeline_context` 和 `human_feedback`；缺少 PRD 时写入错误并降级 |
+| `plan_design` | 构造设计章节计划，记录是否有代码上下文、验收标准数量和输出章节 |
+| `draft_design` | 调用 `LlmClient.complete_json` 生成结构化设计文档 |
+| `validate_design` | 校验 `summary`、`modules` 和 `file_plan` 等关键字段 |
+| `repair_design` | 只补齐 JSON 结构缺口，降低 confidence，并要求人工复核 |
+| `finalize` | 返回 `design_doc`，并把设计产物写入 `pipeline_context.artifact_index.SYSTEM_DESIGN` |
+| `fail_soft` | 输入不完整时返回诊断型 `design_doc`，避免后续阶段误认为设计已完成 |
+
+### 调试日志
+
+DesignAgent 在以下位置输出 warning，方便本地调试和真实 LLM 调用排查：
+
+- 缺少 `structured_prd`：说明 RequirementAgent 产物没有传到设计阶段。
+- 缺少 `code_context`：说明本次设计只能基于 PRD，不能引用代码证据。
+- 存在 `human_feedback`：说明当前是人工驳回后的修订路径。
+- 调用 LLM 前：记录 inspected file 数量和是否存在反馈。
+- 结构校验失败：记录缺失字段列表。
+- 结构修复：记录修复次数和校验问题。
+
+### 输出产物
+
+`design_doc` 包含：
+
+- `summary`
+- `modules`
+- `api_contracts`
+- `data_changes`
+- `file_plan`
+- `risks`
+- `open_questions`
+- `feedback`
+- `code_context_summary`
+- `quality`
+- `source = design_agent`
+
+`SYSTEM_DESIGN` Activity 输出会继续携带 `pipeline_context`，保证后续 `CODE_GENERATION` 阶段可以复用需求分析和设计阶段的共享上下文。
 
 ## 代码库上下文工具
 

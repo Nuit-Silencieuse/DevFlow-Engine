@@ -194,6 +194,83 @@
 6. 返回 design_doc 和 current_step
 ```
 
+## T023 实现补充：DesignAgent 子图
+
+T023 已将 `SYSTEM_DESIGN` 阶段从占位逻辑替换为 `execution-plane/src/agents/design_agent.py` 中的真实 LangGraph 子图。该 Agent 统一通过 T021 的 `LlmClient.complete_json` 调用模型，不引入规则式设计生成器。
+
+子图节点顺序：
+
+```text
+prepare_input
+  -> plan_design
+  -> draft_design
+  -> validate_design
+  -> repair_design?   # 仅修复 JSON 结构缺口，不生成新业务事实
+  -> finalize
+```
+
+失败路径：
+
+```text
+prepare_input invalid -> fail_soft
+validate_design invalid 且不可修复 -> fail_soft
+```
+
+关键状态字段：
+
+| 字段 | 含义 |
+|------|------|
+| `structured_prd` | RequirementAgent 输出的结构化需求，是 DesignAgent 的必需输入 |
+| `code_context` | 需求分析阶段留下的代码证据摘要，用于判断现有模块、文件计划和风险 |
+| `pipeline_context` | 跨阶段共享上下文，DesignAgent 会把 `design_doc` 追加到 `artifact_index.SYSTEM_DESIGN` |
+| `human_feedback` | 人工驳回后注入的修订意见，进入 LLM Prompt 并写入 `design_doc.feedback` |
+| `design_plan` | Agent 内部规划，记录需要生成 summary、modules、api_contracts、data_changes、file_plan、risks、open_questions |
+| `validation_report` | 设计文档结构校验结果，便于调试 LLM 输出缺字段问题 |
+
+`design_doc` 输出结构：
+
+```json
+{
+  "summary": "设计摘要",
+  "modules": [
+    {
+      "name": "模块名",
+      "responsibility": "职责",
+      "dependencies": []
+    }
+  ],
+  "api_contracts": [],
+  "data_changes": [],
+  "file_plan": [
+    {
+      "path": "需要创建或修改的文件",
+      "operation": "create|update|delete",
+      "reason": "修改原因"
+    }
+  ],
+  "risks": [],
+  "open_questions": [],
+  "feedback": "人工反馈",
+  "code_context_summary": {},
+  "quality": {},
+  "source": "design_agent"
+}
+```
+
+调试与日志策略：
+
+- 缺少 `structured_prd` 时写 warning，并走 `fail_soft` 返回诊断型 `design_doc`。
+- 存在 `structured_prd` 但缺少 `code_context` 时写 warning，表示设计只能依赖 PRD。
+- 存在 `human_feedback` 时写 warning，提示本次设计是反馈修订路径。
+- 调用 LLM 前写 warning，记录已检查文件数量和是否存在反馈，便于排查模型调用前输入是否正确。
+- 校验失败和结构修复时写 warning，输出缺失字段列表和修复尝试次数。
+
+设计边界：
+
+- `repair_design` 只补齐结构壳，例如缺少 `modules` 或 `file_plan` 时生成“待确认”项，并降低 confidence；它不会根据规则生成完整业务设计。
+- DesignAgent 不重新进行代码库渐进探索。它复用 `code_context` 与 `pipeline_context`，后续需要更细粒度文件读取时应由对应阶段 Agent 做增量探索。
+- `flow.py` 的 `design_system_node` 现在调用 `DesignAgent().run(state)`，Temporal Activity 仍然只看到 `SYSTEM_DESIGN` 阶段的输入输出。
+
 ## T024: Coder Agent
 
 目标文件:

@@ -429,6 +429,83 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertGreater(len(code_context["candidate_files"]), len(code_context["inspected_files"]))
         self.assertIn("repository_map", code_context)
 
+    def test_reuses_shared_pipeline_context_before_new_exploration(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        with self.temporary_repository() as repo_dir:
+            Path(repo_dir, "src").mkdir()
+            Path(repo_dir, "src", "reused.py").write_text("class ReusedContext:\n    pass\n", encoding="utf-8")
+            provider = ProgressivePlanFakeProvider(
+                {
+                    "summary": "reuse existing context",
+                    "user_stories": [
+                        {"role": "developer", "goal": "reuse context", "benefit": "avoid duplicate reads"}
+                    ],
+                    "acceptance_criteria": [
+                        {"id": "AC-1", "description": "reuse context", "verification": "inspect trace"},
+                        {"id": "AC-2", "description": "keep PRD output", "verification": "inspect result"},
+                    ],
+                }
+            )
+            client = LlmClient(
+                config=LlmClientConfig(default_provider="fake", max_retries=0),
+                providers={"fake": provider},
+            )
+            result = RequirementAgent(llm_client=client).run(
+                {
+                    "original_requirement": "分析已有代码上下文复用",
+                    "repository_context": {"rootPath": repo_dir, "maxFiles": 20},
+                    "pipeline_context": {
+                        "version": 1,
+                        "code_contexts": [
+                            {
+                                "stage": "REQUIREMENT_ANALYSIS",
+                                "agent": "requirement_agent",
+                                "status": "COMPLETE",
+                                "root_path": str(Path(repo_dir).resolve()),
+                                "inspected_files": ["src/reused.py"],
+                                "search_queries": ["ReusedContext"],
+                                "candidate_files": ["src/reused.py"],
+                                "repository_map": {"rootPath": str(Path(repo_dir).resolve())},
+                                "evidence": [
+                                    {
+                                        "filePath": "src/reused.py",
+                                        "lineStart": 1,
+                                        "lineEnd": 2,
+                                        "excerpt": "class ReusedContext",
+                                        "relevanceReason": "previous evidence",
+                                        "supports": ["ReusedContext"],
+                                    }
+                                ],
+                                "skipped_paths": [],
+                                "budget_usage": {
+                                    "rounds_used": 1,
+                                    "files_read": 1,
+                                    "bytes_read": 32,
+                                    "searches_used": 1,
+                                },
+                                "confidence": 0.86,
+                                "open_questions": [],
+                                "notes": [],
+                                "exploration_trace": [],
+                                "source": "requirement_agent",
+                            }
+                        ],
+                        "artifact_index": {},
+                    },
+                }
+            )
+
+        self.assertNotIn("progressive_context_exploration_plan", provider.calls)
+        self.assertEqual(result["code_context"]["inspected_files"], ["src/reused.py"])
+        self.assertEqual(result["code_context"]["budget_usage"]["files_read"], 0)
+        self.assertEqual(result["exploration_trace"][0]["actionType"], "REUSE_CONTEXT")
+        self.assertIn("pipeline_context", result)
+        self.assertEqual(
+            result["pipeline_context"]["latest_code_context"]["inspected_files"],
+            ["src/reused.py"],
+        )
+
     def test_phrase_queries_are_split_and_low_hit_context_does_not_report_high_confidence(self):
         from src.agents.requirement_agent import RequirementAgent
 

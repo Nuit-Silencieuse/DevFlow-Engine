@@ -6,6 +6,7 @@ from typing import Any, TypedDict
 class DevFlowState(TypedDict, total=False):
     original_requirement: str
     repository_context: dict[str, Any]
+    pipeline_context: dict[str, Any]
     code_context: dict[str, Any]
     structured_prd: dict[str, Any]
     design_doc: dict[str, Any]
