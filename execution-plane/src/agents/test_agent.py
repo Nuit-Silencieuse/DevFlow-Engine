@@ -145,7 +145,6 @@ class TestAgent:
             task="test_generation",
             messages=build_test_messages(state),
             json_schema=TEST_RESULTS_SCHEMA,
-            timeout_seconds=120,
             metadata={"stage": TEST_GENERATION},
         )
         draft = self.llm_client.complete_json(request)

@@ -9,15 +9,26 @@ from typing import Any, Mapping
 EXECUTION_PLANE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOCAL_ENV_FILE = EXECUTION_PLANE_ROOT / ".env.local"
 
+DEFAULT_TASK_TIMEOUT_SECONDS = {
+    "progressive_context_exploration_plan": 120.0,
+    "requirement_analysis": 180.0,
+    "system_design": 360.0,
+    "code_generation": 240.0,
+    "test_generation": 240.0,
+}
+
 
 @dataclass(frozen=True)
 class LlmClientConfig:
     default_provider: str = "openai_compatible"
     default_model: str | None = None
     temperature: float = 0.2
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 240.0
     max_retries: int = 2
     json_repair_attempts: int = 1
+    task_timeout_seconds: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_TASK_TIMEOUT_SECONDS)
+    )
     provider_settings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
@@ -29,13 +40,14 @@ class LlmClientConfig:
             temperature=parse_float(source.get("DEVFLOW_LLM_TEMPERATURE"), 0.2),
             timeout_seconds=parse_float(
                 source.get("DEVFLOW_LLM_TIMEOUT_SECONDS"),
-                60.0,
+                240.0,
             ),
             max_retries=parse_int(source.get("DEVFLOW_LLM_MAX_RETRIES"), 2),
             json_repair_attempts=parse_int(
                 source.get("DEVFLOW_LLM_JSON_REPAIR_ATTEMPTS"),
                 1,
             ),
+            task_timeout_seconds=task_timeouts_from_env(source),
             provider_settings={
                 "openai_compatible": {
                     "api_key": empty_to_none(source.get("DEVFLOW_LLM_OPENAI_API_KEY")),
@@ -128,12 +140,15 @@ class LlmClientConfig:
             temperature=parse_float(get_any(data, "temperature"), 0.2),
             timeout_seconds=parse_float(
                 get_any(data, "timeoutSeconds", "timeout_seconds"),
-                60.0,
+                240.0,
             ),
             max_retries=parse_int(get_any(data, "maxRetries", "max_retries"), 2),
             json_repair_attempts=parse_int(
                 get_any(data, "jsonRepairAttempts", "json_repair_attempts"),
                 1,
+            ),
+            task_timeout_seconds=task_timeouts_from_mapping(
+                get_any(data, "taskTimeoutSeconds", "task_timeout_seconds")
             ),
             provider_settings={
                 str(provider_name): normalize_provider_settings(settings, source)
@@ -150,6 +165,10 @@ class LlmClientConfig:
         provider_settings = merge_provider_settings(
             self.provider_settings,
             env_config.provider_settings,
+        )
+        task_timeout_seconds = merge_task_timeouts(
+            self.task_timeout_seconds,
+            task_timeouts_from_env(source, include_defaults=False),
         )
         return replace(
             self,
@@ -172,6 +191,7 @@ class LlmClientConfig:
                 source.get("DEVFLOW_LLM_JSON_REPAIR_ATTEMPTS"),
                 self.json_repair_attempts,
             ),
+            task_timeout_seconds=task_timeout_seconds,
             provider_settings=provider_settings,
         )
 
@@ -191,6 +211,17 @@ class LlmClientConfig:
 
     def settings_for(self, provider_name: str) -> dict[str, Any]:
         return dict(self.provider_settings.get(provider_name, {}))
+
+    def timeout_for_task(
+        self,
+        task: str | None,
+        request_timeout_seconds: float | None = None,
+    ) -> float:
+        task_timeout = self.task_timeout_seconds.get(normalize_task_name(task))
+        configured = task_timeout if task_timeout is not None else request_timeout_seconds
+        if configured is None:
+            configured = self.timeout_seconds
+        return max(float(configured), float(self.timeout_seconds))
 
 
 def empty_to_none(value: Any) -> str | None:
@@ -251,6 +282,51 @@ def merge_provider_settings(
         for key, value in settings.items():
             if value not in (None, ""):
                 current[key] = value
+    return merged
+
+
+def normalize_task_name(task: str | None) -> str:
+    return str(task or "").strip().lower()
+
+
+def parse_task_timeout_map(value: Any) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return dict(DEFAULT_TASK_TIMEOUT_SECONDS)
+    result = dict(DEFAULT_TASK_TIMEOUT_SECONDS)
+    for key, raw_value in value.items():
+        timeout = parse_float(raw_value, result.get(normalize_task_name(key), 0.0))
+        if timeout > 0:
+            result[normalize_task_name(key)] = timeout
+    return result
+
+
+def task_timeouts_from_env(
+    env: Mapping[str, str],
+    include_defaults: bool = True,
+) -> dict[str, float]:
+    result = dict(DEFAULT_TASK_TIMEOUT_SECONDS) if include_defaults else {}
+    for task_name, default_timeout in DEFAULT_TASK_TIMEOUT_SECONDS.items():
+        env_key = f"DEVFLOW_LLM_TIMEOUT_{task_name.upper()}"
+        if env_key not in env and not include_defaults:
+            continue
+        timeout = parse_float(env.get(env_key), default_timeout)
+        if timeout > 0:
+            result[task_name] = timeout
+    return result
+
+
+def task_timeouts_from_mapping(value: Any) -> dict[str, float]:
+    return parse_task_timeout_map(value)
+
+
+def merge_task_timeouts(
+    base: Mapping[str, float],
+    overrides: Mapping[str, float],
+) -> dict[str, float]:
+    merged = dict(base)
+    for task_name, timeout in overrides.items():
+        if timeout > 0:
+            merged[normalize_task_name(task_name)] = float(timeout)
     return merged
 
 

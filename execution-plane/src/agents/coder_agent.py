@@ -142,7 +142,6 @@ class CoderAgent:
             task="code_generation",
             messages=build_coder_messages(state),
             json_schema=CODER_PATCH_SCHEMA,
-            timeout_seconds=120,
             metadata={"stage": CODE_GENERATION},
         )
         draft = self.llm_client.complete_json(request)
@@ -217,7 +216,10 @@ class CoderAgent:
         }
 
     def fail_soft(self, state: CoderAgentState) -> CoderAgentState:
-        errors = list(state.get("errors", [])) or ["code generation failed"]
+        errors = list(state.get("errors", []))
+        validation_issues = list((state.get("validation_report") or {}).get("issues", []))
+        errors = errors + validation_issues if validation_issues else errors
+        errors = errors or ["code generation failed"]
         logger.warning("CoderAgent entered fail_soft. errors=%s", errors)
         report = {
             "status": "BLOCKED",
@@ -337,6 +339,8 @@ def validate_patch_payload(value: dict[str, Any]) -> list[str]:
         issues.append("diff_patch is required")
     if diff_patch.strip() and not looks_like_unified_diff(diff_patch):
         issues.append("diff_patch must be a unified diff")
+    if diff_patch.strip():
+        issues.extend(validate_unified_diff_structure(diff_patch))
     if contains_forbidden_execution_text(diff_patch):
         issues.append("diff_patch must not contain command execution instructions")
     try:
@@ -391,6 +395,65 @@ def looks_like_unified_diff(text: str) -> bool:
             and re.search(r"^@@\s+", text, re.MULTILINE)
         )
     )
+
+
+def validate_unified_diff_structure(diff_patch: str) -> list[str]:
+    """对 unified diff 做轻量结构校验，提前拦截 git apply 会拒绝的补丁。
+
+    `looks_like_unified_diff` 只能确认补丁外形存在 `diff --git`、`---/+++` 和
+    hunk header；但真实失败常见于 hunk header 声明的旧/新行数与后续正文
+    不一致。这里按 hunk 逐段统计上下文行、删除行和新增行，能够在代码生成
+    阶段给出可读错误，避免把明显损坏的 patch 推迟到 APPLY_AND_RUN_TESTS。
+    """
+
+    issues: list[str] = []
+    lines = diff_patch.splitlines()
+    hunk_pattern = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+    index = 0
+    while index < len(lines):
+        match = hunk_pattern.match(lines[index])
+        if not match:
+            index += 1
+            continue
+
+        old_expected = int(match.group(1) or "1")
+        new_expected = int(match.group(2) or "1")
+        old_seen = 0
+        new_seen = 0
+        hunk_line = index + 1
+        index += 1
+
+        while index < len(lines):
+            line = lines[index]
+            if line.startswith("diff --git ") or hunk_pattern.match(line):
+                break
+            if line.startswith("\\"):
+                index += 1
+                continue
+            if line.startswith(" "):
+                old_seen += 1
+                new_seen += 1
+            elif line.startswith("-"):
+                old_seen += 1
+            elif line.startswith("+"):
+                new_seen += 1
+            elif line == "":
+                old_seen += 1
+                new_seen += 1
+            else:
+                issues.append(
+                    f"diff hunk at line {hunk_line} contains invalid line {index + 1}: "
+                    "body lines must start with space, '+', '-', or '\\'"
+                )
+            index += 1
+
+        if old_seen != old_expected or new_seen != new_expected:
+            issues.append(
+                f"diff hunk at line {hunk_line} declares -{old_expected}/+{new_expected} "
+                f"lines but contains -{old_seen}/+{new_seen} lines"
+            )
+
+    return issues
 
 
 def contains_forbidden_execution_text(text: str) -> bool:

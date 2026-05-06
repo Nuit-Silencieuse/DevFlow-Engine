@@ -86,6 +86,10 @@ class LlmClient:
             raise LlmConfigurationError(f"LLM provider '{provider_name}' is not registered")
         request_config = self.config.for_request(provider_name, request.model)
         provider_settings = request_config.settings_for(provider_name)
+        effective_timeout_seconds = request_config.timeout_for_task(
+            request.task,
+            request.timeout_seconds,
+        )
         self.trace_recorder.record(
             "llm.request",
             {
@@ -98,7 +102,7 @@ class LlmClient:
                 "temperature": request.temperature
                 if request.temperature is not None
                 else request_config.temperature,
-                "timeout_seconds": request.timeout_seconds or request_config.timeout_seconds,
+                "timeout_seconds": effective_timeout_seconds,
                 "metadata": request.metadata,
                 "messages": [
                     {"role": message.role, "content": message.content}
@@ -107,17 +111,31 @@ class LlmClient:
                 "json_schema": request.json_schema,
             },
         )
-        response = self._complete_with_retries(provider, request, request_config)
+        response = self._complete_with_retries(
+            provider,
+            replace(request, timeout_seconds=effective_timeout_seconds),
+            request_config,
+        )
         if request.response_format != "json":
             self.trace_recorder.record(
                 "llm.response",
                 response_to_trace_payload(request, response),
             )
             return response
-        parsed_json = parse_json_response(
-            response.text,
-            repair_attempts=request_config.json_repair_attempts,
-        )
+        try:
+            parsed_json = parse_json_response(
+                response.text,
+                repair_attempts=request_config.json_repair_attempts,
+            )
+        except LlmJsonParseError:
+            # JSON 解析失败时也记录原始响应。否则 Temporal 只会看到
+            # “line 1 column 1” 这类 JSONDecodeError，无法判断模型到底是
+            # 返回了纯 diff、Markdown 说明、空文本，还是 provider 的异常页面。
+            self.trace_recorder.record(
+                "llm.response",
+                response_to_trace_payload(request, response),
+            )
+            raise
         parsed_response = replace(response, parsed_json=parsed_json)
         self.trace_recorder.record(
             "llm.response",
@@ -162,7 +180,17 @@ def parse_json_response(text: str, repair_attempts: int = 1) -> dict[str, Any]:
             return parsed
         except (json.JSONDecodeError, LlmJsonParseError) as exc:
             last_error = exc
-    raise LlmJsonParseError(f"LLM response is not valid JSON: {last_error}") from last_error
+    preview = response_preview(text)
+    raise LlmJsonParseError(
+        f"LLM response is not valid JSON: {last_error}; response_preview={preview!r}"
+    ) from last_error
+
+
+def response_preview(text: str, limit: int = 240) -> str:
+    compact = text.strip().replace("\r", "\\r").replace("\n", "\\n")
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "...[truncated]"
 
 
 def extract_json_text(text: str) -> str:

@@ -341,6 +341,16 @@ button:focus-visible {
   background: #eef7ff;
 }
 
+.stage-row.needs-review {
+  border-color: #d97706;
+  background: #fff7e6;
+}
+
+.stage-row.reviewed {
+  border-color: #0f766e;
+  background: #ecfdf5;
+}
+
 .stage-name {
   font-weight: 800;
 }
@@ -644,9 +654,20 @@ button:focus-visible {
   line-height: 1.45;
 }
 
+.checkpoint-output-details {
+  margin-top: 14px;
+}
+
+.checkpoint-output-details summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .checkpoint-output {
   min-height: 124px;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .checkpoint-panel textarea {
@@ -679,6 +700,18 @@ button:focus-visible {
   .artifact-card {
     grid-template-columns: 1fr;
   }
+}
+
+.decision-row label:has(input[value="APPROVE"]) {
+  border-color: #0f766e;
+  color: #0f5132;
+  background: #dff8e7;
+}
+
+.decision-row label:has(input[value="REJECT"]) {
+  border-color: #b42318;
+  color: #842029;
+  background: #fde2e1;
 }
 
 @media (max-width: 720px) {

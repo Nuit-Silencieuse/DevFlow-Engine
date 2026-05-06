@@ -44,7 +44,7 @@ class PipelineServiceTest {
 
         var response = pipelineService.createPipeline(new CreatePipelineRequest(
             "Add auth",
-            "实现登录注册",
+            "瀹炵幇鐧诲綍娉ㄥ唽",
             List.of("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION"),
             new RepositoryContext(
                 "D:/projects/demo-app",
@@ -66,11 +66,13 @@ class PipelineServiceTest {
 
         Pipeline saved = pipelineCaptor.getValue();
         assertThat(response.pipelineId()).isEqualTo(saved.getId());
+        assertThat(response.workflowId()).startsWith("devflow-Add-auth-");
         assertThat(response.status()).isEqualTo("RUNNING");
         assertThat(saved.getStatus()).isEqualTo(PipelineStatus.RUNNING);
         assertThat(saved.getCurrentStage()).isEqualTo("REQUIREMENT_ANALYSIS");
-        assertThat(saved.getGlobalContext()).containsEntry("original_requirement", "实现登录注册");
+        assertThat(saved.getGlobalContext()).containsEntry("original_requirement", "瀹炵幇鐧诲綍娉ㄥ唽");
         assertThat(saved.getGlobalContext()).containsKey("repository");
+        assertThat(saved.getGlobalContext().get("workflow_id")).asString().startsWith("devflow-Add-auth-");
         assertThat(repositoryMap(saved.getGlobalContext().get("repository")))
             .containsEntry("rootPath", "D:/projects/demo-app")
             .containsEntry("maxRounds", 4)
@@ -118,6 +120,7 @@ class PipelineServiceTest {
         var response = pipelineService.getPipeline(pipelineId);
 
         assertThat(response.pipelineId()).isEqualTo(pipelineId);
+        assertThat(response.workflowId()).isEqualTo("devflow-Add-auth-" + pipelineId);
         assertThat(response.status()).isEqualTo("RUNNING");
         assertThat(response.currentStage()).isEqualTo("SYSTEM_DESIGN");
         assertThat(response.repository().rootPath()).isEqualTo("D:/projects/demo-app");
@@ -140,7 +143,7 @@ class PipelineServiceTest {
         pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
 
         when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
-        when(temporalPipelineGateway.getStatus(pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
+        when(temporalPipelineGateway.getStatus("devflow-Add-auth-" + pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
             pipelineId,
             "SUSPENDED",
             "SYSTEM_DESIGN",
@@ -149,7 +152,7 @@ class PipelineServiceTest {
                     "REQUIREMENT_ANALYSIS",
                     "COMPLETED",
                     Map.of(
-                        "structured_prd", Map.of("summary", "登录注册"),
+                        "structured_prd", Map.of("summary", "鐧诲綍娉ㄥ唽"),
                         "codeContext", Map.of("status", "COMPLETE"),
                         "explorationTrace", List.of(Map.of("actionType", "PLAN"))
                     )
@@ -188,7 +191,7 @@ class PipelineServiceTest {
         pipeline.addStage(PipelineService.createStage("REQUIREMENT_ANALYSIS"));
 
         when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
-        when(temporalPipelineGateway.getStatus(pipelineId)).thenThrow(new RuntimeException("Temporal query unavailable"));
+        when(temporalPipelineGateway.getStatus("devflow-Add-auth-" + pipelineId)).thenThrow(new RuntimeException("Temporal query unavailable"));
 
         var response = pipelineService.getPipeline(pipelineId);
 
@@ -213,15 +216,15 @@ class PipelineServiceTest {
         var response = pipelineService.submitCheckpointDecision(
             pipelineId,
             "SYSTEM_DESIGN",
-            new CheckpointDecisionRequest("REJECT", "补充数据库说明")
+            new CheckpointDecisionRequest("REJECT", "Add database details")
         );
 
         assertThat(response.status()).isEqualTo("RUNNING");
-        verify(temporalPipelineGateway).signalCheckpoint(
+        verify(temporalPipelineGateway).signalCheckpoint("devflow-Add-auth-" + pipelineId,
             pipelineId,
             "SYSTEM_DESIGN",
             CheckpointDecision.REJECT,
-            "补充数据库说明"
+            "Add database details"
         );
     }
 
@@ -238,14 +241,14 @@ class PipelineServiceTest {
         pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
 
         when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
-        when(temporalPipelineGateway.getStatus(pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
+        when(temporalPipelineGateway.getStatus("devflow-Add-auth-" + pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
             pipelineId,
             "SUSPENDED",
             "SYSTEM_DESIGN",
             List.of(new StageExecutionResult(
                 "SYSTEM_DESIGN",
                 "COMPLETED",
-                Map.of("design_doc", Map.of("summary", "需要审批的方案"))
+                Map.of("design_doc", Map.of("summary", "闇€瑕佸鎵圭殑鏂规"))
             ))
         )));
 
@@ -257,12 +260,20 @@ class PipelineServiceTest {
 
         assertThat(response.stageName()).isEqualTo("SYSTEM_DESIGN");
         assertThat(response.stageOutput()).containsKey("design_doc");
-        verify(temporalPipelineGateway).signalCheckpoint(
+        verify(temporalPipelineGateway).signalCheckpoint("devflow-Add-auth-" + pipelineId,
             pipelineId,
             "SYSTEM_DESIGN",
             CheckpointDecision.APPROVE,
             ""
         );
+    }
+
+    @Test
+    void workflowIdKeepsReadableChinesePrefix() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000099");
+
+        assertThat(TemporalPipelineGatewayImpl.workflowId(pipelineId, "需求分析 测试/流水线"))
+            .isEqualTo("devflow-需求分析-测试-流水线-" + pipelineId);
     }
 
     @SuppressWarnings("unchecked")

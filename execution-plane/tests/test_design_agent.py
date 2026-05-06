@@ -21,9 +21,11 @@ class RecordingDesignProvider:
         self.response = response
         self.calls: list[str] = []
         self.last_messages: list[dict[str, str]] = []
+        self.timeout_by_task: dict[str, float | None] = {}
 
     def complete(self, request, config):
         self.calls.append(request.task)
+        self.timeout_by_task[request.task] = request.timeout_seconds
         self.last_messages = [
             {"role": message.role, "content": message.content}
             for message in request.messages

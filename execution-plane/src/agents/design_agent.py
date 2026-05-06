@@ -154,7 +154,6 @@ class DesignAgent:
             task="system_design",
             messages=build_design_messages(state),
             json_schema=DESIGN_DOC_SCHEMA,
-            timeout_seconds=90,
             metadata={"stage": SYSTEM_DESIGN},
         )
         draft = self.llm_client.complete_json(request)

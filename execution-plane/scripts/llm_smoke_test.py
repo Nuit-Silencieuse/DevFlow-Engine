@@ -26,7 +26,6 @@ def main() -> int:
             provider=args.provider,
             model=args.model,
             temperature=0,
-            timeout_seconds=30,
             messages=(
                 LlmMessage(
                     "system",

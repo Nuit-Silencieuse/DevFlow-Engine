@@ -32,15 +32,15 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
             DevFlowWorkflow.class,
             WorkflowOptions.newBuilder()
                 .setTaskQueue(taskQueue)
-                .setWorkflowId(workflowId(input.pipelineId()))
+                .setWorkflowId(workflowId(input.pipelineId(), input.name()))
                 .build()
         );
         WorkflowClient.start(workflow::start, input);
     }
 
     @Override
-    public void signalCheckpoint(UUID pipelineId, String stageName, CheckpointDecision decision, String feedback) {
-        DevFlowWorkflow workflow = workflowClient.newWorkflowStub(DevFlowWorkflow.class, workflowId(pipelineId));
+    public void signalCheckpoint(String workflowId, UUID pipelineId, String stageName, CheckpointDecision decision, String feedback) {
+        DevFlowWorkflow workflow = workflowClient.newWorkflowStub(DevFlowWorkflow.class, workflowId);
         CheckpointSignal signal = new CheckpointSignal(pipelineId, stageName, decision, feedback);
         if (decision == CheckpointDecision.APPROVE) {
             workflow.approveCheckpoint(signal);
@@ -50,7 +50,7 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
     }
 
     @Override
-    public Optional<WorkflowStatusSnapshot> getStatus(UUID pipelineId) {
+    public Optional<WorkflowStatusSnapshot> getStatus(String workflowId) {
         /*
          * 控制平面自身持有数据库快照，但真正的阶段执行结果首先产生在 Temporal Workflow 中。
          * 这里通过 Workflow Query 读取内存中的 WorkflowStatusSnapshot，然后由 PipelineService
@@ -60,14 +60,34 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
          * 2. 查询失败或 Workflow 尚未创建时，不影响数据库里已有快照的读取能力。
          */
         try {
-            DevFlowWorkflow workflow = workflowClient.newWorkflowStub(DevFlowWorkflow.class, workflowId(pipelineId));
+            DevFlowWorkflow workflow = workflowClient.newWorkflowStub(DevFlowWorkflow.class, workflowId);
             return Optional.ofNullable(workflow.getStatus());
         } catch (WorkflowNotFoundException ex) {
             return Optional.empty();
         }
     }
 
-    static String workflowId(UUID pipelineId) {
-        return "devflow-pipeline-" + pipelineId;
+    static String workflowId(UUID pipelineId, String pipelineName) {
+        String prefix = sanitizeWorkflowPrefix(pipelineName);
+        return "devflow-" + prefix + "-" + pipelineId;
+    }
+
+    static String sanitizeWorkflowPrefix(String pipelineName) {
+        if (pipelineName == null || pipelineName.isBlank()) {
+            return "pipeline";
+        }
+        StringBuilder builder = new StringBuilder();
+        pipelineName.trim().codePoints().forEach(codePoint -> {
+            if (Character.isLetterOrDigit(codePoint)) {
+                builder.appendCodePoint(codePoint);
+            } else if (builder.length() == 0 || builder.charAt(builder.length() - 1) != '-') {
+                builder.append('-');
+            }
+        });
+        String value = builder.toString().replaceAll("^-+|-+$", "");
+        if (value.isBlank()) {
+            return "pipeline";
+        }
+        return value.length() <= 40 ? value : value.substring(0, 40);
     }
 }

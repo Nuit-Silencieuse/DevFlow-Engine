@@ -1,4 +1,4 @@
-import { PipelineApiClient, PipelineApiError } from "./api";
+﻿import { PipelineApiClient, PipelineApiError } from "./api";
 import "./styles.css";
 import type { CheckpointDecision, PipelineStatusResponse, StageStatusResponse } from "./types";
 import {
@@ -20,6 +20,7 @@ interface AppState {
   pipeline: PipelineStatusResponse | null;
   selectedStageName: string | null;
   lastCheckpointOutput: Record<string, unknown> | null;
+  checkpointOutputExpanded: boolean;
   loading: boolean;
   message: string | null;
   error: string | null;
@@ -27,15 +28,18 @@ interface AppState {
 
 const api = new PipelineApiClient();
 const app = document.querySelector<HTMLDivElement>("#app");
+const AUTO_REFRESH_INTERVAL_MS = 3000;
 
 const state: AppState = {
   pipeline: null,
   selectedStageName: null,
   lastCheckpointOutput: null,
+  checkpointOutputExpanded: false,
   loading: false,
   message: null,
   error: null,
 };
+let autoRefreshInFlight = false;
 
 if (!app) {
   throw new Error("App root not found.");
@@ -63,12 +67,12 @@ app.innerHTML = `
 
         <label class="field">
           <span>流水线名称</span>
-          <input name="name" value="DevFlow 控制台联调" autocomplete="off" required />
+          <input name="name" value="DevFlow 插件开发" autocomplete="off" required />
         </label>
 
         <label class="field">
           <span>新需求</span>
-          <textarea name="requirement" required>以当前 DevFlow-Engine项目的 tasks.md 为材料，完成T023。</textarea>
+          <textarea name="requirement" required>完成 DevFlow-Engine 阶段 4 的 T030 任务。请在根目录的test文件夹下生成一个简单的测试网页和插件代码。</textarea>
         </label>
 
         <fieldset class="field stage-field">
@@ -151,7 +155,10 @@ sandbox/frontend/src/main.ts</textarea>
           <textarea id="feedbackInput" placeholder="Reject 时建议写明需要补充或重做的内容；Approve 可留空。"></textarea>
         </label>
         <button id="submitDecisionButton" class="primary-button full-button" type="button">提交反馈</button>
-        <pre id="checkpointOutput" class="checkpoint-output">{}</pre>
+        <details id="checkpointOutputDetails" class="checkpoint-output-details">
+          <summary>查看提交响应</summary>
+          <pre id="checkpointOutput" class="checkpoint-output"></pre>
+        </details>
       </section>
     </section>
   </main>
@@ -171,6 +178,7 @@ const artifactOutput = mustGet<HTMLDivElement>("artifactOutput");
 const checkpointHint = mustGet<HTMLSpanElement>("checkpointHint");
 const submitDecisionButton = mustGet<HTMLButtonElement>("submitDecisionButton");
 const feedbackInput = mustGet<HTMLTextAreaElement>("feedbackInput");
+const checkpointOutputDetails = mustGet<HTMLDetailsElement>("checkpointOutputDetails");
 const checkpointOutput = mustGet<HTMLPreElement>("checkpointOutput");
 const stageOptions = mustGet<HTMLDivElement>("stageOptions");
 
@@ -201,7 +209,7 @@ createForm.addEventListener("submit", async (event) => {
     pipelineIdInput.value = response.pipelineId;
     state.selectedStageName = null;
     state.lastCheckpointOutput = null;
-    state.message = `流水线已启动：${response.pipelineId}`;
+    state.message = `已创建流水线：${response.pipelineId}${response.workflowId ? ` / Workflow: ${response.workflowId}` : ""}`;
     await refreshPipeline();
   });
 });
@@ -223,12 +231,20 @@ submitDecisionButton.addEventListener("click", async () => {
       feedbackInput.value.trim(),
     );
     state.lastCheckpointOutput = response.stageOutput;
+    state.checkpointOutputExpanded = false;
     state.message = response.message;
     await refreshPipeline();
   });
 });
 
 render();
+checkpointOutputDetails.addEventListener("toggle", () => {
+  state.checkpointOutputExpanded = checkpointOutputDetails.open;
+  renderCheckpoint(selectReviewStage(state.pipeline, state.selectedStageName), state.pipeline);
+});
+window.setInterval(() => {
+  void autoRefreshPipeline();
+}, AUTO_REFRESH_INTERVAL_MS);
 
 async function refreshPipeline(): Promise<void> {
   const pipelineId = pipelineIdInput.value.trim();
@@ -254,6 +270,29 @@ function readCreateForm() {
     maxFiles: String(data.get("maxFiles") ?? ""),
     maxBytes: String(data.get("maxBytes") ?? ""),
   };
+}
+
+async function autoRefreshPipeline(): Promise<void> {
+  const pipelineId = pipelineIdInput.value.trim();
+  if (!pipelineId || state.loading || autoRefreshInFlight) {
+    return;
+  }
+  if (state.pipeline?.status === "COMPLETED" || state.pipeline?.status === "FAILED") {
+    return;
+  }
+  autoRefreshInFlight = true;
+  try {
+    state.pipeline = await api.getPipeline(pipelineId);
+    const selected = selectReviewStage(state.pipeline, state.selectedStageName);
+    state.selectedStageName = selected?.name ?? null;
+    state.error = null;
+    render();
+  } catch (error) {
+    state.error = describeError(error);
+    render();
+  } finally {
+    autoRefreshInFlight = false;
+  }
 }
 
 function readDecision(): CheckpointDecision {
@@ -287,7 +326,7 @@ function render(): void {
   renderSummary(pipeline);
   renderStageList(pipeline, selectedStage);
   renderArtifact(selectedStage);
-  renderCheckpoint(selectedStage);
+  renderCheckpoint(selectedStage, pipeline);
 
   createButton.disabled = state.loading;
   refreshButton.disabled = state.loading;
@@ -305,6 +344,7 @@ function renderSummary(pipeline: PipelineStatusResponse | null): void {
   pipelineSummary.replaceChildren();
   const items = [
     ["Pipeline ID", pipeline?.pipelineId ?? "-"],
+    ["Workflow ID", pipeline?.workflowId ?? "-"],
     ["当前阶段", pipeline?.currentStage ? stageLabel(pipeline.currentStage) : "-"],
     ["阶段数", pipeline ? String(pipeline.stages.length) : "0"],
     ["代码库", pipeline?.repository?.rootPath ?? "未提供"],
@@ -336,9 +376,10 @@ function renderStageList(
   }
 
   for (const stage of pipeline.stages) {
+    const reviewState = checkpointReviewState(stage, pipeline);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `stage-row ${selectedStage?.name === stage.name ? "selected" : ""}`;
+    button.className = `stage-row ${selectedStage?.name === stage.name ? "selected" : ""} ${reviewState === "required" ? "needs-review" : ""} ${reviewState === "reviewed" ? "reviewed" : ""}`;
     button.addEventListener("click", () => {
       state.selectedStageName = stage.name;
       render();
@@ -349,7 +390,7 @@ function renderStageList(
     name.textContent = stageLabel(stage.name);
     const meta = document.createElement("span");
     meta.className = "stage-meta";
-    meta.textContent = `${stage.status}${stage.requiresHumanApproval ? " / 需审批" : ""}${hasArtifact(stage) ? " / 有产物" : ""}`;
+    meta.textContent = `${stage.status}${reviewState === "required" ? " / 需要人工检查" : ""}${reviewState === "reviewed" ? " / 已审查" : ""}${stage.requiresHumanApproval && reviewState === "none" ? " / 需审查" : ""}${hasArtifact(stage) ? " / 有产物" : ""}`;
     button.append(name, meta);
     stageList.append(button);
   }
@@ -600,17 +641,40 @@ function escapeText(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function renderCheckpoint(stage: StageStatusResponse | null): void {
+function renderCheckpoint(stage: StageStatusResponse | null, pipeline: PipelineStatusResponse | null): void {
+  const reviewState = checkpointReviewState(stage, pipeline);
   if (!stage) {
-    checkpointHint.textContent = "等待可审批阶段";
+    checkpointHint.textContent = "等待可审查阶段";
+  } else if (reviewState === "required") {
+    checkpointHint.textContent = `${stageLabel(stage.name)} 需要人工检查：请审查阶段产物后选择 Approve 或 Reject。`;
+  } else if (reviewState === "reviewed") {
+    checkpointHint.textContent = `${stageLabel(stage.name)} 已经审查，流水线可继续执行后续阶段。`;
   } else if (stage.requiresHumanApproval) {
     checkpointHint.textContent = `${stageLabel(stage.name)} 可提交人工反馈`;
   } else {
-    checkpointHint.textContent = `${stageLabel(stage.name)} 默认不是人工检查点，但仍可按后端契约提交 Signal`;
+    checkpointHint.textContent = `${stageLabel(stage.name)} 默认不是人工检查点。`;
   }
-  checkpointOutput.textContent = formatJson(state.lastCheckpointOutput ?? {});
+  checkpointOutputDetails.open = state.checkpointOutputExpanded;
+  checkpointOutput.textContent = state.checkpointOutputExpanded && state.lastCheckpointOutput
+    ? formatJson(state.lastCheckpointOutput)
+    : "";
 }
 
+function checkpointReviewState(
+  stage: StageStatusResponse | null,
+  pipeline: PipelineStatusResponse | null,
+): "required" | "reviewed" | "none" {
+  if (!stage?.requiresHumanApproval) {
+    return "none";
+  }
+  if (pipeline?.status === "SUSPENDED" && pipeline.currentStage === stage.name) {
+    return "required";
+  }
+  if (stage.status === "COMPLETED" || stage.status === "REJECTED") {
+    return "reviewed";
+  }
+  return "none";
+}
 function describeError(error: unknown): string {
   if (error instanceof PipelineApiError) {
     return `${error.status}: ${error.message}`;

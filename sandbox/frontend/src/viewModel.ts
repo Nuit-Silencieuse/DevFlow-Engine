@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   BudgetUsage,
   CodeContextSummary,
   CreatePipelineRequest,
@@ -571,6 +571,8 @@ function readableLabel(key: string): string {
     file: "文件",
     action: "动作",
     risk: "风险",
+    case: "边界场景",
+    handling: "处理方式",
     mitigation: "缓解措施",
     confidence: "置信度",
     source: "来源",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from src.graph.flow import (
     APPLY_AND_RUN_TESTS,
@@ -68,14 +69,34 @@ def registered_activities():
 
 
 def _execute_stage(stage_name: str, request: StageExecutionRequest) -> StageExecutionResult:
-    state = _state_from_request(request)
-    result_state = run_stage(stage_name, state)
-    output_payload = _output_payload_for_stage(stage_name, result_state)
-    return {
-        "stageName": stage_name,
-        "status": "COMPLETED",
-        "outputPayload": output_payload,
-    }
+    try:
+        state = _state_from_request(request)
+        result_state = run_stage(stage_name, state)
+        output_payload = _output_payload_for_stage(stage_name, result_state)
+        return {
+            "stageName": stage_name,
+            "status": "COMPLETED",
+            "outputPayload": output_payload,
+        }
+    except Exception as exc:
+        raise concise_activity_error(stage_name, exc) from None
+
+
+def concise_activity_error(stage_name: str, exc: Exception) -> ApplicationError:
+    error_type = exc.__class__.__name__
+    message = str(exc).strip() or error_type
+    if len(message) > 1200:
+        message = message[:1200] + "... [truncated]"
+    hint = ""
+    if error_type == "LlmTimeoutError" or "timed out" in message.casefold():
+        hint = (
+            "。这通常表示模型响应超过当前超时时间；可提高 DEVFLOW_LLM_TIMEOUT_SECONDS，"
+            "或降低上下文/输出规模后重试。"
+        )
+    return ApplicationError(
+        f"{stage_name} Activity failed: {error_type}: {message}{hint}",
+        type=f"DevFlow{error_type}",
+    )
 
 
 def _state_from_request(request: StageExecutionRequest) -> DevFlowState:

@@ -2,7 +2,14 @@
   "defaultProvider": "openai_compatible",
   "defaultModel": null,
   "temperature": 0.2,
-  "timeoutSeconds": 60,
+  "timeoutSeconds": 240,
+  "taskTimeoutSeconds": {
+    "progressive_context_exploration_plan": 120,
+    "requirement_analysis": 180,
+    "system_design": 360,
+    "code_generation": 240,
+    "test_generation": 240
+  },
   "maxRetries": 2,
   "jsonRepairAttempts": 1,
   "providers": {

@@ -192,7 +192,6 @@ class RequirementAgent:
             task="requirement_analysis",
             messages=build_messages(state),
             json_schema=REQUIREMENT_PRD_SCHEMA,
-            timeout_seconds=90,
             metadata={"stage": REQUIREMENT_ANALYSIS},
         )
         draft = self.llm_client.complete_json(request)
@@ -855,7 +854,6 @@ def build_exploration_plan(
                 messages=build_exploration_plan_messages(requirement_text, repo_map, request),
                 json_schema=EXPLORATION_PLAN_SCHEMA,
                 temperature=0.0,
-                timeout_seconds=60,
                 metadata={"stage": REQUIREMENT_ANALYSIS, "rootPath": str(request.resolved_root)},
             )
         )

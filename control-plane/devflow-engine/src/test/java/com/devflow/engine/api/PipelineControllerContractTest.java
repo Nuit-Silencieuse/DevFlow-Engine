@@ -35,7 +35,7 @@ class PipelineControllerContractTest {
     void createPipelineAcceptsContractRequest() throws Exception {
         UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000101");
         when(pipelineService.createPipeline(any(CreatePipelineRequest.class)))
-            .thenReturn(new CreatePipelineResponse(pipelineId, "RUNNING"));
+            .thenReturn(new CreatePipelineResponse(pipelineId, "devflow-Add-auth-" + pipelineId, "RUNNING"));
 
         mockMvc.perform(post("/api/v1/pipelines")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -79,14 +79,14 @@ class PipelineControllerContractTest {
     void createPipelineTreatsRepositoryAdvancedFieldsAsOptional() throws Exception {
         UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000102");
         when(pipelineService.createPipeline(any(CreatePipelineRequest.class)))
-            .thenReturn(new CreatePipelineResponse(pipelineId, "RUNNING"));
+            .thenReturn(new CreatePipelineResponse(pipelineId, "devflow-Add-auth-" + pipelineId, "RUNNING"));
 
         mockMvc.perform(post("/api/v1/pipelines")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {
                       "name": "Root only repository context",
-                      "requirement": "分析健康检查需求",
+                      "requirement": "Analyze health check requirement",
                       "stages": ["REQUIREMENT_ANALYSIS"],
                       "repository": {
                         "rootPath": "D:/projects/demo-app"
@@ -117,6 +117,7 @@ class PipelineControllerContractTest {
         when(pipelineService.getPipeline(pipelineId))
             .thenReturn(new PipelineStatusResponse(
                 pipelineId,
+                "devflow-Add-auth-" + pipelineId,
                 "RUNNING",
                 "SYSTEM_DESIGN",
                 new RepositoryContext(

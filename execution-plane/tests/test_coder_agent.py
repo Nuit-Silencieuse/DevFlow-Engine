@@ -21,9 +21,11 @@ class RecordingCoderProvider:
         self.response = response
         self.calls: list[str] = []
         self.last_messages: list[dict[str, str]] = []
+        self.timeout_by_task: dict[str, float | None] = {}
 
     def complete(self, request, config):
         self.calls.append(request.task)
+        self.timeout_by_task[request.task] = request.timeout_seconds
         self.last_messages = [
             {"role": message.role, "content": message.content}
             for message in request.messages
@@ -111,7 +113,7 @@ class CoderAgentTest(unittest.TestCase):
         diff_patch = """diff --git a/execution-plane/src/graph/flow.py b/execution-plane/src/graph/flow.py
 --- a/execution-plane/src/graph/flow.py
 +++ b/execution-plane/src/graph/flow.py
-@@ -1,3 +1,4 @@
+@@ -1,2 +1,3 @@
 +from src.agents import CoderAgent
  def generate_code_node(state):
 -    return {"diff_patch": "reserved"}
@@ -182,6 +184,32 @@ class CoderAgentTest(unittest.TestCase):
         self.assertIn("design_doc is required", result["error_logs"][0])
         self.assertEqual(result["diff_patch"], "")
         self.assertEqual(result["code_generation_report"]["status"], "BLOCKED")
+
+    def test_invalid_hunk_line_count_is_blocked_before_apply_stage(self):
+        from src.agents.coder_agent import CoderAgent
+
+        corrupt_diff = """diff --git a/demo.ts b/demo.ts
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/demo.ts
+@@ -0,0 +1,3 @@
++const a = 1;
++const b = 2;
+"""
+
+        result = CoderAgent(llm_client=coder_llm_client({
+            "summary": "corrupt patch",
+            "diff_patch": corrupt_diff,
+            "changed_files": [{"path": "demo.ts", "operation": "create"}],
+            "risks": [],
+            "open_questions": [],
+        })).run(sample_state())
+
+        self.assertEqual(result["current_step"], "CODE_GENERATION")
+        self.assertEqual(result["diff_patch"], "")
+        self.assertEqual(result["code_generation_report"]["status"], "BLOCKED")
+        self.assertIn("declares -0/+3 lines but contains -0/+2 lines", result["error_logs"][0])
 
     def test_flow_node_invokes_coder_agent(self):
         from src.graph.flow import generate_code_node

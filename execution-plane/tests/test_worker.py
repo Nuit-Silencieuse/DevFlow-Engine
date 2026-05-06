@@ -10,6 +10,7 @@ from src.workers.activities import (
     apply_and_run_tests,
     registered_activities,
     _state_from_request,
+    concise_activity_error,
 )
 from src.workers.worker import TASK_QUEUE
 
@@ -284,6 +285,13 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
             state["pipeline_context"]["code_contexts"][0]["inspected_files"],
             ["src/App.tsx"],
         )
+
+    def test_concise_activity_error_explains_llm_timeout_without_large_payload(self):
+        error = concise_activity_error("SYSTEM_DESIGN", TimeoutError("LLM provider request timed out"))
+
+        self.assertIn("SYSTEM_DESIGN Activity failed", str(error))
+        self.assertIn("DEVFLOW_LLM_TIMEOUT_SECONDS", str(error))
+        self.assertLess(len(str(error)), 1400)
 
 
 if __name__ == "__main__":

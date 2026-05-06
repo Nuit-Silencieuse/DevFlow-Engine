@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public record PipelineStatusResponse(
     UUID pipelineId,
+    String workflowId,
     String status,
     String currentStage,
     RepositoryContext repository,

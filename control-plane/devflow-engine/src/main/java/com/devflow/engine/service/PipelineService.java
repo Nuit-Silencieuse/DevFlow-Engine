@@ -64,7 +64,8 @@ public class PipelineService {
         pipeline.setId(UUID.randomUUID());
         pipeline.setStatus(PipelineStatus.RUNNING);
         pipeline.setCurrentStage(requestedStages.get(0));
-        pipeline.setGlobalContext(createGlobalContext(request.requirement(), requestedStages, repository));
+        String workflowId = TemporalPipelineGatewayImpl.workflowId(pipeline.getId(), request.name());
+        pipeline.setGlobalContext(createGlobalContext(request.requirement(), requestedStages, repository, workflowId));
         requestedStages.forEach(stageName -> pipeline.addStage(createStage(stageName)));
 
         Pipeline saved = pipelineRepository.save(pipeline);
@@ -76,7 +77,7 @@ public class PipelineService {
             saved.getGlobalContext()
         ));
 
-        return new CreatePipelineResponse(saved.getId(), saved.getStatus().name());
+        return new CreatePipelineResponse(saved.getId(), workflowId(saved), saved.getStatus().name());
     }
 
     @Transactional
@@ -101,6 +102,7 @@ public class PipelineService {
 
         return new PipelineStatusResponse(
             pipeline.getId(),
+            workflowId(pipeline),
             pipeline.getStatus().name(),
             pipeline.getCurrentStage(),
             readRepositoryContext(pipeline),
@@ -119,7 +121,7 @@ public class PipelineService {
         synchronizeWorkflowSnapshot(pipeline);
 
         CheckpointDecision decision = parseDecision(request.decision());
-        temporalPipelineGateway.signalCheckpoint(pipelineId, stageName, decision, request.feedback());
+        temporalPipelineGateway.signalCheckpoint(workflowId(pipeline), pipelineId, stageName, decision, request.feedback());
 
         Map<String, Object> stageOutput = pipeline.getStages().stream()
             .filter(stage -> stage.getName().equals(stageName))
@@ -155,7 +157,7 @@ public class PipelineService {
          * 看到流水线已创建、当前阶段、repository 上下文和历史阶段产物。
          */
         try {
-            readWorkflowSnapshotWithTimeout(pipeline.getId())
+            readWorkflowSnapshotWithTimeout(pipeline)
                 .ifPresent(snapshot -> applyWorkflowSnapshot(pipeline, snapshot));
         } catch (RuntimeException ex) {
             log.warn(
@@ -167,19 +169,19 @@ public class PipelineService {
         }
     }
 
-    private Optional<WorkflowStatusSnapshot> readWorkflowSnapshotWithTimeout(UUID pipelineId) {
+    private Optional<WorkflowStatusSnapshot> readWorkflowSnapshotWithTimeout(Pipeline pipeline) {
         /*
          * Temporal 的 Query 在 workflow execution 已创建但尚无 Worker 承载时，可能会等待服务端 buffered query
          * 清理后才失败。控制台的状态刷新不应被这个等待拖住，因此这里给“读取最新 Workflow 快照”设置短超时。
          * 超时并不代表流水线不存在，只代表本次无法拿到内存态快照；数据库快照仍然是有效的展示来源。
          */
         return CompletableFuture
-            .supplyAsync(() -> temporalPipelineGateway.getStatus(pipelineId))
+            .supplyAsync(() -> temporalPipelineGateway.getStatus(workflowId(pipeline)))
             .orTimeout(WORKFLOW_SNAPSHOT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .exceptionally(ex -> {
                 log.warn(
                     "Temporal workflow snapshot query timed out or failed for pipeline {}. Returning persisted database snapshot: {}",
-                    pipelineId,
+                    pipeline.getId(),
                     ex.toString()
                 );
                 log.debug("Temporal workflow snapshot query failed.", ex);
@@ -278,15 +280,25 @@ public class PipelineService {
     private static Map<String, Object> createGlobalContext(
         String requirement,
         List<String> stages,
-        RepositoryContext repository
+        RepositoryContext repository,
+        String workflowId
     ) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("original_requirement", requirement);
         context.put("requested_stages", stages);
+        context.put("workflow_id", workflowId);
         if (repository != null) {
             context.put("repository", repositoryToMap(repository));
         }
         return context;
+    }
+
+    private static String workflowId(Pipeline pipeline) {
+        Object value = pipeline.getGlobalContext().get("workflow_id");
+        if (value != null && StringUtils.hasText(String.valueOf(value))) {
+            return String.valueOf(value);
+        }
+        return TemporalPipelineGatewayImpl.workflowId(pipeline.getId(), pipeline.getName());
     }
 
     private static RepositoryContext normalizeRepository(RepositoryContext repository) {

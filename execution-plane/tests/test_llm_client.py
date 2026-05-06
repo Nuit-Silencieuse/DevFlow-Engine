@@ -19,6 +19,7 @@ from src.llm import (
 )
 from src.llm.config import (
     EXECUTION_PLANE_ROOT,
+    DEFAULT_TASK_TIMEOUT_SECONDS,
     load_env_file,
     merge_env_sources,
     resolve_config_file,
@@ -151,6 +152,30 @@ class LlmClientTest(unittest.TestCase):
                 LlmRequest(task="bad_json", messages=(LlmMessage("user", "x"),))
             )
 
+    def test_invalid_json_error_includes_response_preview_and_trace(self):
+        recorder = LlmTraceRecorder(enabled=True)
+        client = LlmClient(
+            config=LlmClientConfig(
+                default_provider="fake",
+                max_retries=0,
+                json_repair_attempts=0,
+            ),
+            providers={
+                "fake": FakeProvider(
+                    response_text="```diff\n+not json\n```",
+                )
+            },
+            trace_recorder=recorder,
+        )
+
+        with self.assertRaises(LlmJsonParseError) as raised:
+            client.complete_json(
+                LlmRequest(task="bad_json", messages=(LlmMessage("user", "x"),))
+            )
+
+        self.assertIn("response_preview", str(raised.exception))
+        self.assertIn("+not json", str(raised.exception))
+
     def test_missing_provider_configuration_raises_error(self):
         client = LlmClient(
             config=LlmClientConfig(default_provider="missing", max_retries=0),
@@ -238,6 +263,57 @@ class LlmClientTest(unittest.TestCase):
             config.provider_settings["openai_compatible"]["api_key"],
             "sk-from-env",
         )
+
+    def test_task_timeout_defaults_are_at_least_doubled(self):
+        config = LlmClientConfig.from_env(env={})
+
+        self.assertEqual(config.timeout_seconds, 240)
+        self.assertEqual(
+            config.task_timeout_seconds["progressive_context_exploration_plan"],
+            120,
+        )
+        self.assertEqual(config.task_timeout_seconds["requirement_analysis"], 180)
+        self.assertEqual(config.task_timeout_seconds["system_design"], 360)
+        self.assertEqual(config.task_timeout_seconds["code_generation"], 240)
+        self.assertEqual(config.task_timeout_seconds["test_generation"], 240)
+        self.assertGreaterEqual(
+            config.task_timeout_seconds["requirement_analysis"],
+            DEFAULT_TASK_TIMEOUT_SECONDS["progressive_context_exploration_plan"],
+        )
+
+    def test_task_timeout_environment_overrides_unify_agent_request_timeout(self):
+        captured = {}
+
+        class CapturingProvider:
+            name = "fake"
+
+            def complete(self, request, config):
+                captured[request.task] = request.timeout_seconds
+                return FakeProvider(response_text='{"ok": true}', name="fake").complete(
+                    request,
+                    config,
+                )
+
+        config = LlmClientConfig.from_env(
+            env={
+                "DEVFLOW_LLM_PROVIDER": "fake",
+                "DEVFLOW_LLM_TIMEOUT_SECONDS": "240",
+                "DEVFLOW_LLM_TIMEOUT_REQUIREMENT_ANALYSIS": "300",
+            }
+        )
+        client = LlmClient(
+            config=config,
+            providers={"fake": CapturingProvider()},
+        )
+
+        client.complete_json(
+            LlmRequest(
+                task="requirement_analysis",
+                messages=(LlmMessage("user", "x"),),
+            )
+        )
+
+        self.assertEqual(captured["requirement_analysis"], 300)
 
     def test_sources_allow_environment_to_override_file_defaults(self):
         config_path = write_test_config(
@@ -519,7 +595,6 @@ class LlmClientRealNetworkTest(unittest.TestCase):
                 task="real_network_smoke_test",
                 provider=provider,
                 temperature=0,
-                timeout_seconds=30,
                 messages=(
                     LlmMessage(
                         "system",

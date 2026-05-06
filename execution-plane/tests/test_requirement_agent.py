@@ -27,15 +27,36 @@ def fake_llm_client(response: dict) -> LlmClient:
     )
 
 
+def fake_llm_client_with_provider(response: dict) -> tuple[LlmClient, "ProgressivePlanFakeProvider"]:
+    provider = ProgressivePlanFakeProvider(response)
+    return (
+        LlmClient(
+            config=LlmClientConfig(
+                default_provider="fake",
+                max_retries=0,
+                timeout_seconds=240,
+                task_timeout_seconds={
+                    "progressive_context_exploration_plan": 130,
+                    "requirement_analysis": 310,
+                },
+            ),
+            providers={"fake": provider},
+        ),
+        provider,
+    )
+
+
 class ProgressivePlanFakeProvider:
     name = "fake"
 
     def __init__(self, prd_response: dict):
         self.prd_response = prd_response
         self.calls: list[str] = []
+        self.timeout_by_task: dict[str, float | None] = {}
 
     def complete(self, request, config):
         self.calls.append(request.task)
+        self.timeout_by_task[request.task] = request.timeout_seconds
         if request.task == "progressive_context_exploration_plan":
             response = {
                 "queries": ["health", "Temporal worker"],
@@ -121,6 +142,32 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertEqual(result["structured_prd"]["source"], "requirement_agent")
         self.assertEqual(result["structured_prd"]["summary"], "增加用户登录能力")
         self.assertGreaterEqual(len(result["structured_prd"]["acceptance_criteria"]), 2)
+
+    def test_requirement_agent_uses_configured_task_timeouts(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        client, provider = fake_llm_client_with_provider(
+            {
+                "summary": "configured timeout",
+                "user_stories": [{"role": "user", "goal": "run", "benefit": "ok"}],
+                "acceptance_criteria": [
+                    {"id": "AC-001", "description": "works", "verification": "inspect"}
+                ],
+            }
+        )
+
+        RequirementAgent(llm_client=client).run(
+            {
+                "original_requirement": "analyze requirement with repository",
+                "repository_context": {"rootPath": str(Path(__file__).resolve().parents[1])},
+            }
+        )
+
+        self.assertEqual(
+            provider.timeout_by_task["progressive_context_exploration_plan"],
+            240,
+        )
+        self.assertEqual(provider.timeout_by_task["requirement_analysis"], 310)
 
     def test_empty_requirement_returns_diagnostic_error(self):
         from src.agents.requirement_agent import RequirementAgent

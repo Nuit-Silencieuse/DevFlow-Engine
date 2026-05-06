@@ -1,6 +1,7 @@
 package com.devflow.engine.workflow;
 
 import io.temporal.activity.ActivityOptions;
+import io.temporal.common.RetryOptions;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -28,6 +29,9 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
             DevFlowActivities.class,
             ActivityOptions.newBuilder()
                 .setStartToCloseTimeout(Duration.ofMinutes(30))
+                .setRetryOptions(RetryOptions.newBuilder()
+                    .setMaximumAttempts(5)
+                    .build())
                 .build()
         ));
     }

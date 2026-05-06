@@ -30,6 +30,7 @@ export interface CreatePipelineRequest {
 
 export interface CreatePipelineResponse {
   pipelineId: string;
+  workflowId?: string;
   status: string;
 }
 
@@ -95,6 +96,7 @@ export interface StageStatusResponse {
 
 export interface PipelineStatusResponse {
   pipelineId: string;
+  workflowId?: string;
   status: string;
   currentStage: string;
   repository: RepositoryContext | null;
