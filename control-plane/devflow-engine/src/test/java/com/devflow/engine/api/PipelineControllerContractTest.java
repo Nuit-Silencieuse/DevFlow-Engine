@@ -15,6 +15,7 @@ import com.devflow.engine.service.PipelineService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.OffsetDateTime;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -148,6 +149,56 @@ class PipelineControllerContractTest {
             .andExpect(jsonPath("$.repository.targetFiles[0]").value("src/App.tsx"))
             .andExpect(jsonPath("$.stages[0].name").value("SYSTEM_DESIGN"))
             .andExpect(jsonPath("$.stages[0].output.design_doc.summary").value("系统设计草案"));
+    }
+
+    @Test
+    void getPipelineSummaryReturnsStageMetadataWithoutArtifacts() throws Exception {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000201");
+        when(pipelineService.getPipelineSummary(pipelineId))
+            .thenReturn(new PipelineSummaryResponse(
+                pipelineId,
+                "devflow-summary-" + pipelineId,
+                "RUNNING",
+                "CODE_GENERATION",
+                null,
+                OffsetDateTime.parse("2026-05-07T10:00:00Z"),
+                List.of(new StageSummaryResponse(
+                    "CODE_GENERATION",
+                    "COMPLETED",
+                    true,
+                    true,
+                    "rev-code"
+                ))
+            ));
+
+        mockMvc.perform(get("/api/v1/pipelines/{id}/summary", pipelineId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.pipelineId").value(pipelineId.toString()))
+            .andExpect(jsonPath("$.currentStage").value("CODE_GENERATION"))
+            .andExpect(jsonPath("$.stages[0].name").value("CODE_GENERATION"))
+            .andExpect(jsonPath("$.stages[0].outputAvailable").value(true))
+            .andExpect(jsonPath("$.stages[0].artifactRevision").value("rev-code"));
+    }
+
+    @Test
+    void getStageArtifactReturnsOnlyRequestedStageOutput() throws Exception {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000202");
+        when(pipelineService.getStageArtifact(pipelineId, "CODE_GENERATION"))
+            .thenReturn(new StageArtifactResponse(
+                pipelineId,
+                "CODE_GENERATION",
+                "COMPLETED",
+                true,
+                "rev-code",
+                Map.of("diff_patch", "diff --git a/a b/a")
+            ));
+
+        mockMvc.perform(get("/api/v1/pipelines/{id}/stages/{stageName}/artifact", pipelineId, "CODE_GENERATION"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.pipelineId").value(pipelineId.toString()))
+            .andExpect(jsonPath("$.stageName").value("CODE_GENERATION"))
+            .andExpect(jsonPath("$.artifactRevision").value("rev-code"))
+            .andExpect(jsonPath("$.output.diff_patch").value("diff --git a/a b/a"));
     }
 
     @Test

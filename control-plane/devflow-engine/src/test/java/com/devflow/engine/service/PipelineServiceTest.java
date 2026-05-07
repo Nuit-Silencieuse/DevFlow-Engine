@@ -16,6 +16,7 @@ import com.devflow.engine.workflow.CheckpointDecision;
 import com.devflow.engine.workflow.DevFlowWorkflowInput;
 import com.devflow.engine.workflow.StageExecutionResult;
 import com.devflow.engine.workflow.WorkflowStatusSnapshot;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -200,6 +201,54 @@ class PipelineServiceTest {
         assertThat(response.currentStage()).isEqualTo("REQUIREMENT_ANALYSIS");
         assertThat(response.stages()).hasSize(1);
         assertThat(response.stages().get(0).status()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void getPipelineSummaryOmitsLargeStageOutputs() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000040");
+        Pipeline pipeline = new Pipeline("Summary");
+        pipeline.setId(pipelineId);
+        pipeline.setStatus(PipelineStatus.RUNNING);
+        pipeline.setCurrentStage("CODE_GENERATION");
+        pipeline.setUpdatedAt(OffsetDateTime.parse("2026-05-07T10:00:00Z"));
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("CODE_GENERATION")
+        ));
+        pipeline.addStage(PipelineService.createStage("CODE_GENERATION"));
+        pipeline.getStages().get(0).setStatus(StageStatus.COMPLETED);
+        pipeline.getStages().get(0).setUpdatedAt(OffsetDateTime.parse("2026-05-07T10:01:00Z"));
+        pipeline.getStages().get(0).setOutputPayload(Map.of("diff_patch", "large diff"));
+
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+
+        var response = pipelineService.getPipelineSummary(pipelineId);
+
+        assertThat(response.pipelineId()).isEqualTo(pipelineId);
+        assertThat(response.stages()).hasSize(1);
+        assertThat(response.stages().get(0).outputAvailable()).isTrue();
+        assertThat(response.stages().get(0).artifactRevision()).isEqualTo("2026-05-07T10:01Z");
+    }
+
+    @Test
+    void getStageArtifactReturnsRequestedOutputPayload() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000041");
+        Pipeline pipeline = new Pipeline("Artifact");
+        pipeline.setId(pipelineId);
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("CODE_GENERATION")
+        ));
+        pipeline.addStage(PipelineService.createStage("CODE_GENERATION"));
+        pipeline.getStages().get(0).setStatus(StageStatus.COMPLETED);
+        pipeline.getStages().get(0).setUpdatedAt(OffsetDateTime.parse("2026-05-07T10:02:00Z"));
+        pipeline.getStages().get(0).setOutputPayload(Map.of("diff_patch", "diff --git a/a b/a"));
+
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+
+        var response = pipelineService.getStageArtifact(pipelineId, "CODE_GENERATION");
+
+        assertThat(response.stageName()).isEqualTo("CODE_GENERATION");
+        assertThat(response.artifactRevision()).isEqualTo("2026-05-07T10:02Z");
+        assertThat(response.output()).containsEntry("diff_patch", "diff --git a/a b/a");
     }
 
     @Test

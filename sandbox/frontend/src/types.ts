@@ -92,6 +92,8 @@ export interface StageStatusResponse {
   status: string;
   requiresHumanApproval: boolean;
   output: StageOutput;
+  outputAvailable?: boolean;
+  artifactRevision?: string;
 }
 
 export interface PipelineStatusResponse {
@@ -101,6 +103,33 @@ export interface PipelineStatusResponse {
   currentStage: string;
   repository: RepositoryContext | null;
   stages: StageStatusResponse[];
+}
+
+export interface StageSummaryResponse {
+  name: string;
+  status: string;
+  requiresHumanApproval: boolean;
+  outputAvailable: boolean;
+  artifactRevision: string;
+}
+
+export interface PipelineSummaryResponse {
+  pipelineId: string;
+  workflowId?: string;
+  status: string;
+  currentStage: string;
+  repository: RepositoryContext | null;
+  updatedAt?: string;
+  stages: StageSummaryResponse[];
+}
+
+export interface StageArtifactResponse {
+  pipelineId: string;
+  stageName: string;
+  status: string;
+  requiresHumanApproval: boolean;
+  artifactRevision: string;
+  output: StageOutput;
 }
 
 export interface CheckpointDecisionResponse {

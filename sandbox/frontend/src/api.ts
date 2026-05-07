@@ -3,7 +3,9 @@ import type {
   CheckpointDecisionResponse,
   CreatePipelineRequest,
   CreatePipelineResponse,
+  PipelineSummaryResponse,
   PipelineStatusResponse,
+  StageArtifactResponse,
 } from "./types";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -34,6 +36,16 @@ export class PipelineApiClient {
 
   getPipeline(pipelineId: string): Promise<PipelineStatusResponse> {
     return this.request<PipelineStatusResponse>(`/pipelines/${encodeURIComponent(pipelineId)}`);
+  }
+
+  getPipelineSummary(pipelineId: string): Promise<PipelineSummaryResponse> {
+    return this.request<PipelineSummaryResponse>(`/pipelines/${encodeURIComponent(pipelineId)}/summary`);
+  }
+
+  getStageArtifact(pipelineId: string, stageName: string): Promise<StageArtifactResponse> {
+    return this.request<StageArtifactResponse>(
+      `/pipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageName)}/artifact`,
+    );
   }
 
   submitCheckpointDecision(

@@ -34,6 +34,19 @@ public class PipelineController {
         return ResponseEntity.ok(pipelineService.getPipeline(id));
     }
 
+    @GetMapping("/{id}/summary")
+    public ResponseEntity<PipelineSummaryResponse> getPipelineSummary(@PathVariable UUID id) {
+        return ResponseEntity.ok(pipelineService.getPipelineSummary(id));
+    }
+
+    @GetMapping("/{id}/stages/{stageName}/artifact")
+    public ResponseEntity<StageArtifactResponse> getStageArtifact(
+        @PathVariable UUID id,
+        @PathVariable String stageName
+    ) {
+        return ResponseEntity.ok(pipelineService.getStageArtifact(id, stageName));
+    }
+
     @PostMapping("/{id}/checkpoints/{stageName}")
     public ResponseEntity<CheckpointDecisionResponse> submitCheckpointDecision(
         @PathVariable UUID id,

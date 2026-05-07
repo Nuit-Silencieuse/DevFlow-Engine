@@ -1,3 +1,7 @@
+# Demo
+demo/
+test/
+
 # Local environment and secrets
 .env
 .env.*

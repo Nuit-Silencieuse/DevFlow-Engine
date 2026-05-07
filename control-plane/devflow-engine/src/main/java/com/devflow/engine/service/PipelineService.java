@@ -4,8 +4,11 @@ import com.devflow.engine.api.CheckpointDecisionRequest;
 import com.devflow.engine.api.CheckpointDecisionResponse;
 import com.devflow.engine.api.CreatePipelineRequest;
 import com.devflow.engine.api.CreatePipelineResponse;
+import com.devflow.engine.api.PipelineSummaryResponse;
 import com.devflow.engine.api.PipelineStatusResponse;
 import com.devflow.engine.api.RepositoryContext;
+import com.devflow.engine.api.StageArtifactResponse;
+import com.devflow.engine.api.StageSummaryResponse;
 import com.devflow.engine.api.StageStatusResponse;
 import com.devflow.engine.model.Pipeline;
 import com.devflow.engine.model.PipelineStatus;
@@ -111,6 +114,55 @@ public class PipelineService {
     }
 
     @Transactional
+    public PipelineSummaryResponse getPipelineSummary(UUID id) {
+        Pipeline pipeline = pipelineRepository.findById(id)
+            .orElseThrow(() -> new NoSuchElementException("Pipeline not found: " + id));
+
+        synchronizeWorkflowSnapshot(pipeline);
+        List<String> requestedOrder = readRequestedStageOrder(pipeline);
+        List<StageSummaryResponse> stages = sortedStages(pipeline, requestedOrder).stream()
+            .map(stage -> new StageSummaryResponse(
+                stage.getName(),
+                stage.getStatus().name(),
+                stage.isRequiresHumanApproval(),
+                !stage.getOutputPayload().isEmpty(),
+                artifactRevision(stage)
+            ))
+            .toList();
+
+        return new PipelineSummaryResponse(
+            pipeline.getId(),
+            workflowId(pipeline),
+            pipeline.getStatus().name(),
+            pipeline.getCurrentStage(),
+            readRepositoryContext(pipeline),
+            pipeline.getUpdatedAt(),
+            stages
+        );
+    }
+
+    @Transactional
+    public StageArtifactResponse getStageArtifact(UUID pipelineId, String stageName) {
+        Pipeline pipeline = pipelineRepository.findById(pipelineId)
+            .orElseThrow(() -> new NoSuchElementException("Pipeline not found: " + pipelineId));
+
+        synchronizeWorkflowSnapshot(pipeline);
+        Stage stage = pipeline.getStages().stream()
+            .filter(candidate -> candidate.getName().equals(stageName))
+            .findFirst()
+            .orElseThrow(() -> new NoSuchElementException("Stage not found: " + stageName));
+
+        return new StageArtifactResponse(
+            pipeline.getId(),
+            stage.getName(),
+            stage.getStatus().name(),
+            stage.isRequiresHumanApproval(),
+            artifactRevision(stage),
+            stage.getOutputPayload()
+        );
+    }
+
+    @Transactional
     public CheckpointDecisionResponse submitCheckpointDecision(
         UUID pipelineId,
         String stageName,
@@ -146,6 +198,19 @@ public class PipelineService {
         return "SYSTEM_DESIGN".equals(stageName)
             || "CODE_GENERATION".equals(stageName)
             || "TEST_GENERATION".equals(stageName);
+    }
+
+    private static List<Stage> sortedStages(Pipeline pipeline, List<String> requestedOrder) {
+        return pipeline.getStages().stream()
+            .sorted((left, right) -> Integer.compare(
+                stageOrder(requestedOrder, left.getName()),
+                stageOrder(requestedOrder, right.getName())
+            ))
+            .toList();
+    }
+
+    private static String artifactRevision(Stage stage) {
+        return stage.getUpdatedAt() == null ? "" : stage.getUpdatedAt().toString();
     }
 
     private void synchronizeWorkflowSnapshot(Pipeline pipeline) {

@@ -1,6 +1,13 @@
 ﻿import { PipelineApiClient, PipelineApiError } from "./api";
 import "./styles.css";
-import type { CheckpointDecision, PipelineStatusResponse, StageStatusResponse } from "./types";
+import type {
+  CheckpointDecision,
+  PipelineStatusResponse,
+  PipelineSummaryResponse,
+  StageArtifactResponse,
+  StageOutput,
+  StageStatusResponse,
+} from "./types";
 import {
   buildCodeContextViewModel,
   buildCreatePipelineRequest,
@@ -21,6 +28,7 @@ interface AppState {
   selectedStageName: string | null;
   lastCheckpointOutput: Record<string, unknown> | null;
   checkpointOutputExpanded: boolean;
+  loadedArtifactRevisions: Record<string, string>;
   loading: boolean;
   message: string | null;
   error: string | null;
@@ -35,6 +43,7 @@ const state: AppState = {
   selectedStageName: null,
   lastCheckpointOutput: null,
   checkpointOutputExpanded: false,
+  loadedArtifactRevisions: {},
   loading: false,
   message: null,
   error: null,
@@ -72,7 +81,7 @@ app.innerHTML = `
 
         <label class="field">
           <span>新需求</span>
-          <textarea name="requirement" required>完成 DevFlow-Engine 阶段 4 的 T030 任务。请在根目录的test文件夹下生成一个简单的测试网页和插件代码，不需要很复杂，完成框架即可。</textarea>
+          <textarea name="requirement" required>完成 DevFlow-Engine 阶段 4 的 T030 任务。请在根目录的demo文件夹下生成一个简单的测试网页和插件代码，不需要很复杂，完成框架即可。</textarea>
         </label>
 
         <fieldset class="field stage-field">
@@ -209,6 +218,7 @@ createForm.addEventListener("submit", async (event) => {
     pipelineIdInput.value = response.pipelineId;
     state.selectedStageName = null;
     state.lastCheckpointOutput = null;
+    state.loadedArtifactRevisions = {};
     state.message = `已创建流水线：${response.pipelineId}${response.workflowId ? ` / Workflow: ${response.workflowId}` : ""}`;
     await refreshPipeline();
   });
@@ -252,6 +262,11 @@ async function refreshPipeline(): Promise<void> {
     throw new Error("请输入 Pipeline ID。");
   }
   state.pipeline = await api.getPipeline(pipelineId);
+  state.loadedArtifactRevisions = Object.fromEntries(
+    state.pipeline.stages
+      .filter((stage) => stage.artifactRevision && hasArtifact(stage))
+      .map((stage) => [stage.name, String(stage.artifactRevision)]),
+  );
   const selected = selectReviewStage(state.pipeline, state.selectedStageName);
   state.selectedStageName = selected?.name ?? null;
   state.message = "流水线状态已刷新。";
@@ -282,17 +297,86 @@ async function autoRefreshPipeline(): Promise<void> {
   }
   autoRefreshInFlight = true;
   try {
-    state.pipeline = await api.getPipeline(pipelineId);
+    state.pipeline = mergePipelineSummary(state.pipeline, await api.getPipelineSummary(pipelineId));
     const selected = selectReviewStage(state.pipeline, state.selectedStageName);
     state.selectedStageName = selected?.name ?? null;
     state.error = null;
-    render();
+    render({ preserveArtifact: true });
   } catch (error) {
     state.error = describeError(error);
-    render();
+    render({ preserveArtifact: true });
   } finally {
     autoRefreshInFlight = false;
   }
+}
+
+async function selectStage(stageName: string): Promise<void> {
+  state.selectedStageName = stageName;
+  const pipelineId = pipelineIdInput.value.trim();
+  const stage = state.pipeline?.stages.find((item) => item.name === stageName) ?? null;
+  if (pipelineId && shouldLoadStageArtifact(stage)) {
+    try {
+      mergeStageArtifact(await api.getStageArtifact(pipelineId, stageName));
+      state.error = null;
+    } catch (error) {
+      state.error = describeError(error);
+    }
+  }
+  render();
+}
+
+function shouldLoadStageArtifact(stage: StageStatusResponse | null): boolean {
+  if (!stage?.outputAvailable) {
+    return false;
+  }
+  return state.loadedArtifactRevisions[stage.name] !== String(stage.artifactRevision ?? "");
+}
+
+function mergePipelineSummary(
+  current: PipelineStatusResponse | null,
+  summary: PipelineSummaryResponse,
+): PipelineStatusResponse {
+  const previousStages = new Map((current?.stages ?? []).map((stage) => [stage.name, stage]));
+  return {
+    pipelineId: summary.pipelineId,
+    workflowId: summary.workflowId,
+    status: summary.status,
+    currentStage: summary.currentStage,
+    repository: summary.repository,
+    stages: summary.stages.map((stage) => {
+      const previous = previousStages.get(stage.name);
+      return {
+        name: stage.name,
+        status: stage.status,
+        requiresHumanApproval: stage.requiresHumanApproval,
+        outputAvailable: stage.outputAvailable,
+        artifactRevision: stage.artifactRevision,
+        output: previous?.output ?? {},
+      };
+    }),
+  };
+}
+
+function mergeStageArtifact(artifact: StageArtifactResponse): void {
+  if (!state.pipeline) {
+    return;
+  }
+  state.pipeline = {
+    ...state.pipeline,
+    stages: state.pipeline.stages.map((stage) =>
+      stage.name === artifact.stageName
+        ? {
+            ...stage,
+            status: artifact.status,
+            requiresHumanApproval: artifact.requiresHumanApproval,
+            artifactRevision: artifact.artifactRevision,
+            outputAvailable: true,
+            output: (artifact.output ?? {}) as StageOutput,
+          }
+        : stage,
+    ),
+  };
+  state.loadedArtifactRevisions[artifact.stageName] = String(artifact.artifactRevision ?? "");
 }
 
 function readDecision(): CheckpointDecision {
@@ -314,7 +398,7 @@ async function withLoading(action: () => Promise<void>): Promise<void> {
   }
 }
 
-function render(): void {
+function render(options: { preserveArtifact?: boolean } = {}): void {
   /*
    * 状态展示以控制平面的 PipelineStatusResponse 为唯一事实来源。
    * Workflow 运行细节、Activity 中间产物和人工检查点结果都已经由后端压缩成阶段快照，
@@ -325,7 +409,9 @@ function render(): void {
   renderGlobalStatus(pipeline);
   renderSummary(pipeline);
   renderStageList(pipeline, selectedStage);
-  renderArtifact(selectedStage);
+  if (!options.preserveArtifact) {
+    renderArtifact(selectedStage);
+  }
   renderCheckpoint(selectedStage, pipeline);
 
   createButton.disabled = state.loading;
@@ -381,8 +467,7 @@ function renderStageList(
     button.type = "button";
     button.className = `stage-row ${selectedStage?.name === stage.name ? "selected" : ""} ${reviewState === "required" ? "needs-review" : ""} ${reviewState === "reviewed" ? "reviewed" : ""}`;
     button.addEventListener("click", () => {
-      state.selectedStageName = stage.name;
-      render();
+      void selectStage(stage.name);
     });
 
     const name = document.createElement("span");

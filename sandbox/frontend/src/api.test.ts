@@ -122,12 +122,53 @@ async function testGetPipelineParsesCodeContextAndExplorationTrace(): Promise<vo
   assert.equal(stage.output.explorationTrace?.[0]?.actionType, "PLAN");
 }
 
+async function testSummaryAndArtifactUseSplitEndpoints(): Promise<void> {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const client = new PipelineApiClient("/api/v1", async (input, init) => {
+    calls.push({ input, init });
+    if (String(input).endsWith("/summary")) {
+      return new Response(JSON.stringify({
+        pipelineId: "p-split",
+        status: "RUNNING",
+        currentStage: "CODE_GENERATION",
+        repository: null,
+        stages: [
+          {
+            name: "CODE_GENERATION",
+            status: "COMPLETED",
+            requiresHumanApproval: true,
+            outputAvailable: true,
+            artifactRevision: "rev-1",
+          },
+        ],
+      }));
+    }
+    return new Response(JSON.stringify({
+      pipelineId: "p-split",
+      stageName: "CODE_GENERATION",
+      status: "COMPLETED",
+      requiresHumanApproval: true,
+      artifactRevision: "rev-1",
+      output: { diff_patch: "diff --git a/a b/a" },
+    }));
+  });
+
+  const summary = await client.getPipelineSummary("p-split");
+  const artifact = await client.getStageArtifact("p-split", "CODE_GENERATION");
+
+  assert.equal(calls[0].input, "/api/v1/pipelines/p-split/summary");
+  assert.equal(calls[1].input, "/api/v1/pipelines/p-split/stages/CODE_GENERATION/artifact");
+  assert.equal(summary.stages[0]?.artifactRevision, "rev-1");
+  assert.equal(artifact.output.diff_patch, "diff --git a/a b/a");
+}
+
 async function main(): Promise<void> {
   await testCreatePipelineUsesControlPlaneContract();
   await testCreatePipelineSupportsAdvancedRepositoryOptions();
   await testSubmitCheckpointEncodesStageAndBody();
   await testApiErrorKeepsBackendMessage();
   await testGetPipelineParsesCodeContextAndExplorationTrace();
+  await testSummaryAndArtifactUseSplitEndpoints();
 }
 
 main().catch((error) => {
