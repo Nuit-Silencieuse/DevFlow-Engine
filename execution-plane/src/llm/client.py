@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import replace
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
-from .config import LlmClientConfig
+from .config import EXECUTION_PLANE_ROOT, LlmClientConfig
 from .errors import (
     LlmConfigurationError,
     LlmJsonParseError,
@@ -127,7 +130,7 @@ class LlmClient:
                 response.text,
                 repair_attempts=request_config.json_repair_attempts,
             )
-        except LlmJsonParseError:
+        except LlmJsonParseError as exc:
             # JSON 解析失败时也记录原始响应。否则 Temporal 只会看到
             # “line 1 column 1” 这类 JSONDecodeError，无法判断模型到底是
             # 返回了纯 diff、Markdown 说明、空文本，还是 provider 的异常页面。
@@ -135,7 +138,12 @@ class LlmClient:
                 "llm.response",
                 response_to_trace_payload(request, response),
             )
-            raise
+            debug_path = write_invalid_json_debug_file(request, response, exc)
+            root_error = exc.__cause__ or exc
+            raise LlmJsonParseError(
+                "LLM response is not valid JSON: "
+                f"{root_error}; full_response_file={debug_path}"
+            ) from root_error
         parsed_response = replace(response, parsed_json=parsed_json)
         self.trace_recorder.record(
             "llm.response",
@@ -210,18 +218,24 @@ def response_preview(text: str, limit: int = 240) -> str:
     compact = text.strip().replace("\r", "\\r").replace("\n", "\\n")
     if len(compact) <= limit:
         return compact
-    return compact[:limit] + "...[truncated]"
+    return compact[:limit]
 
 
 def extract_json_text(text: str) -> str:
     """提取模型响应中的 JSON 文本。
 
     很多模型即使被要求返回 JSON，也可能包一层 Markdown fenced code block。
-    这里只处理格式外壳，不补业务字段，避免客户端偷偷变成规则生成器。
+    这里只处理“包住整个响应”的格式外壳，不补业务字段，避免客户端偷偷变成
+    规则生成器。注意不能在完整 JSON 内部搜索任意 fenced code block，因为
+    代码生成阶段的 `diff_patch` 经常包含 README 里的 ```javascript 示例。
     """
 
     stripped = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", stripped, re.IGNORECASE | re.DOTALL)
+    fenced = re.fullmatch(
+        r"```(?:json)?\s*(.*?)\s*```",
+        stripped,
+        re.IGNORECASE | re.DOTALL,
+    )
     if fenced:
         return fenced.group(1).strip()
     return stripped
@@ -327,3 +341,44 @@ def response_to_trace_payload(request: LlmRequest, response: LlmResponse) -> dic
         "latency_ms": response.latency_ms,
         "request_id": response.request_id,
     }
+
+
+def write_invalid_json_debug_file(
+    request: LlmRequest,
+    response: LlmResponse,
+    error: Exception,
+) -> Path:
+    """把无法解析的模型响应完整写入调试文件。
+
+    Activity 异常消息不能无限增长，否则 Temporal 会再次报 failure payload 过大。
+    因此这里不把完整模型响应塞进异常 message，而是落到本地日志文件。文件中
+    保留原始响应全文，不做 `[truncated]` 截断，方便复盘模型到底返回了什么。
+    """
+
+    debug_dir = resolve_invalid_json_debug_dir()
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    task_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", request.task or "unknown").strip("-")
+    path = debug_dir / f"llm-invalid-json-{task_name or 'unknown'}-{timestamp}.json"
+    payload = {
+        "task": request.task,
+        "metadata": request.metadata,
+        "provider": response.provider,
+        "model": response.model,
+        "request_id": response.request_id,
+        "usage": response.usage,
+        "latency_ms": response.latency_ms,
+        "error_type": error.__class__.__name__,
+        "error_message": str(error),
+        "response_text": response.text,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def resolve_invalid_json_debug_dir() -> Path:
+    configured = os.getenv("DEVFLOW_LLM_INVALID_JSON_DIR")
+    if configured and configured.strip():
+        path = Path(configured.strip())
+        return path if path.is_absolute() else EXECUTION_PLANE_ROOT / path
+    return EXECUTION_PLANE_ROOT / "logs"

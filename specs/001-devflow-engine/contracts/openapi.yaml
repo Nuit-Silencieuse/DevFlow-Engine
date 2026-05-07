@@ -1,0 +1,437 @@
+openapi: 3.0.3
+info:
+  title: DevFlow Engine Control Plane API
+  version: 0.1.0
+  description: |
+    DevFlow Engine 控制平面 HTTP API。
+
+    当前 API 负责创建 AI 研发流水线、查询流水线状态，以及向 Temporal Workflow
+    提交人工检查点审批结果。阶段产物通过 `stages[].output` 和检查点响应中的
+    `stageOutput` 返回，字段内容会随 Agent 阶段逐步扩展。
+servers:
+  - url: http://localhost:8080
+    description: Local control plane
+tags:
+  - name: Pipelines
+    description: 流水线创建、查询和人工检查点操作
+paths:
+  /api/v1/pipelines:
+    post:
+      tags:
+        - Pipelines
+      summary: 创建并启动流水线
+      description: |
+        创建 Pipeline 记录，初始化阶段列表，将 `repository` 上下文写入全局上下文，
+        并通过 Temporal Gateway 启动对应 Workflow。
+      operationId: createPipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePipelineRequest"
+            examples:
+              default:
+                summary: 使用当前项目作为代码库上下文
+                value:
+                  name: DevFlow 插件开发
+                  requirement: 完成 DevFlow-Engine 阶段 4 的 T030 任务。请在根目录的 test 文件夹下生成一个简单的测试网页和插件代码。
+                  stages:
+                    - REQUIREMENT_ANALYSIS
+                    - SYSTEM_DESIGN
+                    - CODE_GENERATION
+                    - TEST_GENERATION
+                    - APPLY_AND_RUN_TESTS
+                  repository:
+                    rootPath: D:/ZPY/Agent学习/DevFlow-Engine
+                    includePaths:
+                      - control-plane/devflow-engine/src/main/java
+                      - execution-plane/src
+                      - sandbox/frontend
+                      - specs/001-devflow-engine
+                    excludePaths:
+                      - node_modules
+                      - target
+                      - dist
+                      - .git
+                    targetFiles:
+                      - specs/001-devflow-engine/tasks.md
+                    maxRounds: 8
+                    maxFiles: 800
+                    maxBytes: 262144
+                    maxSearchResults: 60
+                    privacyMode: standard
+      responses:
+        "201":
+          description: 流水线已创建并启动
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatePipelineResponse"
+              examples:
+                created:
+                  value:
+                    pipelineId: 4a67d0ef-b22c-41a6-aa38-29f7b3e6cf41
+                    workflowId: devflow-DevFlow-插件开发-4a67d0ef-b22c-41a6-aa38-29f7b3e6cf41
+                    status: RUNNING
+        "400":
+          description: 请求体非法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid:
+                  value:
+                    code: INVALID_REQUEST
+                    message: Pipeline requirement is required.
+  /api/v1/pipelines/{id}:
+    get:
+      tags:
+        - Pipelines
+      summary: 查询流水线状态
+      description: |
+        查询数据库中的 Pipeline 和 Stage 快照。控制平面会尽量从 Temporal Workflow
+        同步最新快照；如果 Workflow 查询超时，则返回数据库中已持久化的最近状态。
+      operationId: getPipeline
+      parameters:
+        - $ref: "#/components/parameters/PipelineId"
+      responses:
+        "200":
+          description: 当前流水线状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineStatusResponse"
+              examples:
+                suspended:
+                  value:
+                    pipelineId: 4a67d0ef-b22c-41a6-aa38-29f7b3e6cf41
+                    workflowId: devflow-DevFlow-插件开发-4a67d0ef-b22c-41a6-aa38-29f7b3e6cf41
+                    status: SUSPENDED
+                    currentStage: SYSTEM_DESIGN
+                    repository:
+                      rootPath: D:/ZPY/Agent学习/DevFlow-Engine
+                      includePaths:
+                        - specs/001-devflow-engine
+                      excludePaths:
+                        - node_modules
+                        - target
+                      targetFiles:
+                        - specs/001-devflow-engine/tasks.md
+                      maxRounds: 8
+                      maxFiles: 800
+                      maxBytes: 262144
+                      maxSearchResults: 60
+                      privacyMode: standard
+                    stages:
+                      - name: REQUIREMENT_ANALYSIS
+                        status: COMPLETED
+                        requiresHumanApproval: false
+                        output:
+                          current_step: REQUIREMENT_ANALYSIS
+                          structured_prd:
+                            summary: 需求分析摘要
+                      - name: SYSTEM_DESIGN
+                        status: COMPLETED
+                        requiresHumanApproval: true
+                        output:
+                          current_step: SYSTEM_DESIGN
+                          design_doc:
+                            summary: 方案设计摘要
+        "404":
+          description: 流水线不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notFound:
+                  value:
+                    code: NOT_FOUND
+                    message: "Pipeline not found: 4a67d0ef-b22c-41a6-aa38-29f7b3e6cf41"
+  /api/v1/pipelines/{id}/checkpoints/{stageName}:
+    post:
+      tags:
+        - Pipelines
+      summary: 提交人工检查点决策
+      description: |
+        将人工审批结果转发为 Temporal Signal。`APPROVE` 允许 Workflow 继续执行，
+        `REJECT` 会把反馈写入全局上下文，并触发当前阶段重新执行。
+      operationId: submitCheckpointDecision
+      parameters:
+        - $ref: "#/components/parameters/PipelineId"
+        - name: stageName
+          in: path
+          required: true
+          description: 需要审批的阶段名
+          schema:
+            $ref: "#/components/schemas/StageName"
+          example: SYSTEM_DESIGN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckpointDecisionRequest"
+            examples:
+              approve:
+                summary: 通过当前阶段
+                value:
+                  decision: APPROVE
+                  feedback: ""
+              reject:
+                summary: 驳回并要求补充
+                value:
+                  decision: REJECT
+                  feedback: 设计文档需要补充测试策略和失败回滚说明。
+      responses:
+        "200":
+          description: Signal 已被控制平面接收
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckpointDecisionResponse"
+              examples:
+                accepted:
+                  value:
+                    status: RUNNING
+                    message: Signal received. Pipeline resuming or re-routing.
+                    stageName: SYSTEM_DESIGN
+                    stageOutput:
+                      current_step: SYSTEM_DESIGN
+                      design_doc:
+                        summary: 方案设计摘要
+        "400":
+          description: 决策非法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidDecision:
+                  value:
+                    code: INVALID_REQUEST
+                    message: Checkpoint decision must be APPROVE or REJECT.
+        "404":
+          description: 流水线不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  parameters:
+    PipelineId:
+      name: id
+      in: path
+      required: true
+      description: Pipeline UUID
+      schema:
+        type: string
+        format: uuid
+      example: 4a67d0ef-b22c-41a6-aa38-29f7b3e6cf41
+  schemas:
+    StageName:
+      type: string
+      description: DevFlow 流水线阶段名
+      enum:
+        - REQUIREMENT_ANALYSIS
+        - SYSTEM_DESIGN
+        - CODE_GENERATION
+        - TEST_GENERATION
+        - APPLY_AND_RUN_TESTS
+        - CODE_REVIEW
+        - DELIVERY_INTEGRATION
+    PipelineStatus:
+      type: string
+      enum:
+        - PENDING
+        - RUNNING
+        - SUSPENDED
+        - COMPLETED
+        - FAILED
+        - REJECTED
+    CreatePipelineRequest:
+      type: object
+      required:
+        - name
+        - requirement
+      properties:
+        name:
+          type: string
+          description: 流水线名称。控制平面会用它生成可读 workflowId 前缀。
+          example: DevFlow 插件开发
+        requirement:
+          type: string
+          description: 用户原始需求描述。
+          example: 在 test 文件夹下生成一个简单的测试网页和插件代码。
+        stages:
+          type: array
+          description: |
+            可选阶段列表。为空时控制平面使用默认阶段：
+            REQUIREMENT_ANALYSIS、SYSTEM_DESIGN、CODE_GENERATION、TEST_GENERATION、APPLY_AND_RUN_TESTS。
+          items:
+            $ref: "#/components/schemas/StageName"
+        repository:
+          $ref: "#/components/schemas/RepositoryContext"
+    CreatePipelineResponse:
+      type: object
+      required:
+        - pipelineId
+        - status
+      properties:
+        pipelineId:
+          type: string
+          format: uuid
+          description: 数据库 Pipeline ID，也是前端查询状态使用的 ID。
+        workflowId:
+          type: string
+          description: Temporal Workflow ID，包含流水线名称前缀和 UUID。
+        status:
+          $ref: "#/components/schemas/PipelineStatus"
+    PipelineStatusResponse:
+      type: object
+      required:
+        - pipelineId
+        - status
+        - stages
+      properties:
+        pipelineId:
+          type: string
+          format: uuid
+        workflowId:
+          type: string
+        status:
+          $ref: "#/components/schemas/PipelineStatus"
+        currentStage:
+          $ref: "#/components/schemas/StageName"
+        repository:
+          $ref: "#/components/schemas/RepositoryContext"
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/StageStatusResponse"
+    StageStatusResponse:
+      type: object
+      required:
+        - name
+        - status
+        - requiresHumanApproval
+        - output
+      properties:
+        name:
+          $ref: "#/components/schemas/StageName"
+        status:
+          $ref: "#/components/schemas/PipelineStatus"
+        requiresHumanApproval:
+          type: boolean
+          description: 当前阶段是否需要人工审批。
+        output:
+          type: object
+          additionalProperties: true
+          description: |
+            阶段产物 JSON。常见字段包括 `structured_prd`、`code_context`、
+            `design_doc`、`diff_patch`、`code_generation_report`、`test_results`、
+            `test_run_results`、`review_report` 和 `delivery_status`。
+    RepositoryContext:
+      type: object
+      description: |
+        代码库上下文配置。控制平面只保存和透传这些字段，真正读取文件由执行平面完成。
+      properties:
+        rootPath:
+          type: string
+          description: 代码库根目录。支持 Windows 绝对路径和普通目录路径。
+          example: D:/ZPY/Agent学习/DevFlow-Engine
+        includePaths:
+          type: array
+          description: 高级选项，用于限制探索范围。
+          items:
+            type: string
+        excludePaths:
+          type: array
+          description: 高级选项，用于排除目录、构建产物或敏感路径。
+          items:
+            type: string
+        targetFiles:
+          type: array
+          description: 高级选项，用于提高某些文件的探索优先级。
+          items:
+            type: string
+        maxRounds:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 渐进式探索最大轮次。
+          example: 8
+        maxFiles:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 最大候选/读取文件数。
+          example: 800
+        maxBytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 最大读取字节数。
+          example: 262144
+        maxSearchResults:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 单轮搜索保留的最大结果数。
+          example: 60
+        privacyMode:
+          type: string
+          enum:
+            - standard
+            - strict
+          description: 隐私模式。strict 模式下执行平面应更保守地处理敏感路径和内容。
+          example: standard
+    CheckpointDecision:
+      type: string
+      enum:
+        - APPROVE
+        - REJECT
+    CheckpointDecisionRequest:
+      type: object
+      required:
+        - decision
+      properties:
+        decision:
+          $ref: "#/components/schemas/CheckpointDecision"
+        feedback:
+          type: string
+          description: Reject 时建议填写需要补充或重做的内容；Approve 可为空。
+          example: 设计文档需要补充测试策略和失败回滚说明。
+    CheckpointDecisionResponse:
+      type: object
+      required:
+        - status
+        - message
+        - stageOutput
+      properties:
+        status:
+          $ref: "#/components/schemas/PipelineStatus"
+        message:
+          type: string
+          example: Signal received. Pipeline resuming or re-routing.
+        stageName:
+          $ref: "#/components/schemas/StageName"
+        stageOutput:
+          type: object
+          additionalProperties: true
+          description: 提交 Signal 前同步得到的当前阶段产物快照。
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          enum:
+            - NOT_FOUND
+            - INVALID_REQUEST
+        message:
+          type: string

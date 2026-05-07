@@ -17,8 +17,8 @@ def coder_llm_client(response: dict) -> LlmClient:
 class RecordingCoderProvider:
     name = "fake"
 
-    def __init__(self, response: dict):
-        self.response = response
+    def __init__(self, response: dict | list[dict]):
+        self.responses = list(response) if isinstance(response, list) else [response]
         self.calls: list[str] = []
         self.last_messages: list[dict[str, str]] = []
         self.timeout_by_task: dict[str, float | None] = {}
@@ -30,10 +30,11 @@ class RecordingCoderProvider:
             {"role": message.role, "content": message.content}
             for message in request.messages
         ]
+        response = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
         return LlmResponse(
             provider=self.name,
             model=request.model or config.default_model or "fake-model",
-            text=json.dumps(self.response, ensure_ascii=False),
+            text=json.dumps(response, ensure_ascii=False),
             parsed_json=None,
             usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             latency_ms=0,
@@ -167,11 +168,58 @@ class CoderAgentTest(unittest.TestCase):
         CoderAgent(llm_client=client).run(sample_state())
 
         serialized_messages = json.dumps(provider.last_messages, ensure_ascii=False)
-        user_payload = json.loads(provider.last_messages[1]["content"])
+        user_payload = json.loads(next(message["content"] for message in provider.last_messages if message["role"] == "user"))
         self.assertEqual(user_payload["response_language"], "zh-Hans")
         self.assertIn("只生成 unified diff", serialized_messages)
         self.assertIn("不能写入文件", serialized_messages)
         self.assertIn("不能执行 git", serialized_messages)
+
+        self.assertIn("diff_patch must not contain bash blocks", serialized_messages)
+        self.assertIn("node test/plugin.test.mjs", serialized_messages)
+
+    def test_repairs_shell_command_diff_with_second_llm_call(self):
+        from src.agents.coder_agent import CoderAgent
+
+        repaired_diff = (
+            "diff --git a/test/plugin.test.mjs b/test/plugin.test.mjs\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/test/plugin.test.mjs\n"
+            "@@ -0,0 +1,2 @@\n"
+            "+import assert from 'node:assert';\n"
+            "+assert.ok(true);\n"
+        )
+        provider = RecordingCoderProvider(
+            [
+                {
+                    "summary": "wrong command",
+                    "diff_patch": "```bash\n+node test/plugin.test.mjs\n+\n```",
+                    "changed_files": [{"path": "test/plugin.test.mjs", "operation": "create", "summary": "add test"}],
+                    "risks": [],
+                    "open_questions": [],
+                },
+                {
+                    "summary": "repaired diff",
+                    "diff_patch": repaired_diff,
+                    "changed_files": [{"path": "test/plugin.test.mjs", "operation": "create", "summary": "add test"}],
+                    "risks": [],
+                    "open_questions": [],
+                    "quality": {"confidence": "MEDIUM"},
+                },
+            ]
+        )
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=0),
+            providers={"fake": provider},
+        )
+
+        result = CoderAgent(llm_client=client).run(sample_state())
+
+        self.assertEqual(provider.calls, ["code_generation", "code_generation_repair"])
+        self.assertEqual(result["current_step"], "CODE_GENERATION")
+        self.assertEqual(result["error_logs"], [])
+        self.assertEqual(result["diff_patch"], repaired_diff)
+        self.assertEqual(result["code_generation_report"]["status"], "GENERATED")
 
     def test_missing_design_doc_returns_diagnostic_patch(self):
         from src.agents.coder_agent import CoderAgent
@@ -186,7 +234,7 @@ class CoderAgentTest(unittest.TestCase):
         self.assertEqual(result["code_generation_report"]["status"], "BLOCKED")
         self.assertIn("design_doc", result["code_generation_report"]["open_questions"][0])
 
-    def test_invalid_hunk_line_count_is_blocked_before_apply_stage(self):
+    def test_hunk_line_count_is_normalized_before_validation(self):
         from src.agents.coder_agent import CoderAgent
 
         corrupt_diff = """diff --git a/demo.ts b/demo.ts
@@ -208,17 +256,86 @@ index 0000000..1111111
         })).run(sample_state())
 
         self.assertEqual(result["current_step"], "CODE_GENERATION")
-        self.assertEqual(result["diff_patch"], "")
-        self.assertEqual(result["code_generation_report"]["status"], "BLOCKED")
-        self.assertIn("补丁未通过结构校验", result["code_generation_report"]["summary"])
-        self.assertIn("raw_model_output", result["code_generation_report"]["open_questions"][0])
-        self.assertIn("declares -0/+3 lines but contains -0/+2 lines", result["error_logs"][0])
-        diagnostics = result["code_generation_report"]["llm_diagnostics"]
-        self.assertIn("raw_model_output", diagnostics)
-        self.assertIn("normalized_patch", diagnostics)
-        self.assertIn("validation_report", diagnostics)
-        self.assertIn("diff_patch", diagnostics["raw_model_output"])
-        self.assertIn("declares -0/+3 lines", diagnostics["validation_report"]["issues"][0])
+        self.assertEqual(result["error_logs"], [])
+        self.assertEqual(result["code_generation_report"]["status"], "GENERATED")
+        self.assertIn("@@ -0,0 +1,2 @@", result["diff_patch"])
+        self.assertNotIn("@@ -0,0 +1,3 @@", result["diff_patch"])
+
+    def test_multiple_new_file_hunks_are_normalized_before_validation(self):
+        from src.agents.coder_agent import CoderAgent
+
+        corrupt_diff = """diff --git a/test/index.html b/test/index.html
+new file mode 100644
+index 0000000..257cc56
+--- /dev/null
++++ b/test/index.html
+@@ -0,0 +1,14 @@
++<!DOCTYPE html>
++<html lang="zh-CN">
++<head>
++    <meta charset="UTF-8">
++    <title>DevFlow Test Page</title>
++</head>
++<body>
++    <h1>DevFlow Test Environment</h1>
++    <script type="module" src="./plugin.js"></script>
++</body>
++</html>
+diff --git a/test/plugin.js b/test/plugin.js
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/test/plugin.js
+@@ -0,0 +1,11 @@
++const DevFlowPlugin = {
++    init() {
++        console.log('DevFlow Test Plugin Initialized');
++    }
++};
++
++DevFlowPlugin.init();
++export default DevFlowPlugin;
+diff --git a/test/README.md b/test/README.md
+new file mode 100644
+index 0000000..9e6a5c4
+--- /dev/null
++++ b/test/README.md
+@@ -0,0 +1,13 @@
++# DevFlow Test Environment
++
++This directory serves as a lightweight test environment.
++
++## Files
++
++- `index.html`: The entry point for the test page.
++- `plugin.js`: The plugin code skeleton.
++
++## Verification
++
++1. Open `index.html` in a modern browser.
++2. Confirm the log message.
++3. Done.
+"""
+
+        result = CoderAgent(llm_client=coder_llm_client({
+            "summary": "normalize patch",
+            "diff_patch": corrupt_diff,
+            "changed_files": [
+                {"path": "test/index.html", "operation": "create"},
+                {"path": "test/plugin.js", "operation": "create"},
+                {"path": "test/README.md", "operation": "create"},
+            ],
+            "risks": [],
+            "open_questions": [],
+        })).run(sample_state())
+
+        self.assertEqual(result["current_step"], "CODE_GENERATION")
+        self.assertEqual(result["error_logs"], [])
+        self.assertEqual(result["code_generation_report"]["status"], "GENERATED")
+        self.assertIn("@@ -0,0 +1,11 @@", result["diff_patch"])
+        self.assertIn("@@ -0,0 +1,8 @@", result["diff_patch"])
+        self.assertIn("@@ -0,0 +1,14 @@", result["diff_patch"])
+        self.assertNotIn("declares", json.dumps(result, ensure_ascii=False))
 
     def test_flow_node_invokes_coder_agent(self):
         from src.graph.flow import generate_code_node

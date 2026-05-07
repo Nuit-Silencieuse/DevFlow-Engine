@@ -179,8 +179,17 @@ class CoderAgent:
             int(state.get("attempts", 0)) + 1,
             (state.get("validation_report") or {}).get("issues", []),
         )
-        repaired = normalize_patch_payload(state.get("normalized_patch") or {})
-        repaired["diff_patch"] = strip_markdown_fence(str(repaired.get("diff_patch") or ""))
+        request = LlmRequest(
+            task="code_generation_repair",
+            messages=build_coder_repair_messages(state),
+            json_schema=CODER_PATCH_SCHEMA,
+            metadata={"stage": CODE_GENERATION, "repair": True},
+        )
+        repaired = self.llm_client.complete_json(request)
+        self.llm_client.trace_recorder.record(
+            "coder_agent.repaired_patch",
+            {"repaired_patch": repaired},
+        )
         return {
             "draft_patch": repaired,
             "attempts": int(state.get("attempts", 0)) + 1,
@@ -325,13 +334,54 @@ def build_coder_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
                 "changed_files 需要列出每个文件的 path、operation、summary，方便前端和人工审批展示。"
             ),
         ),
+        LlmMessage(
+            role="system",
+            content=(
+                "Hard rule: diff_patch must be unified diff text only and must contain "
+                "`diff --git a/path b/path`. diff_patch must not contain bash blocks, "
+                "shell commands, validation commands, test commands, markdown fences, or prose. "
+                "Commands such as `node test/plugin.test.mjs`, `npm test`, "
+                "`python -m unittest`, and `mvn test` belong to test command artifacts, "
+                "never to CODE_GENERATION diff_patch."
+            ),
+        ),
+        LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+    )
+
+
+def build_coder_repair_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
+    payload = {
+        "structured_prd": state.get("structured_prd", {}),
+        "design_doc": state.get("design_doc", {}),
+        "code_context_summary": summarize_code_context(state.get("code_context") or {}),
+        "code_plan": state.get("code_plan", {}),
+        "response_language": state.get("response_language", "same_as_requirement"),
+        "validation_report": state.get("validation_report", {}),
+        "invalid_patch": state.get("normalized_patch", {}),
+        "repair_instructions": [
+            "Return JSON only.",
+            "Replace diff_patch with a valid unified diff containing `diff --git a/... b/...`.",
+            "Do not put shell commands, bash snippets, test commands, markdown fences, or prose in diff_patch.",
+            "A command such as `node test/plugin.test.mjs` is not a patch; it belongs to a later test command artifact.",
+            "Keep changed_files, risks, open_questions, and quality consistent with the repaired diff.",
+        ],
+    }
+    return (
+        LlmMessage(
+            role="system",
+            content=(
+                "You are repairing an invalid CODE_GENERATION JSON payload. "
+                "The previous diff_patch failed validation. Return JSON only. "
+                "diff_patch must be unified diff text only, not shell commands."
+            ),
+        ),
         LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
     )
 
 
 def normalize_patch_payload(value: dict[str, Any]) -> dict[str, Any]:
     raw_diff = first_raw_text(value, "diff_patch", "diffPatch", "patch", "unified_diff")
-    diff_patch = strip_markdown_fence(raw_diff)
+    diff_patch = normalize_unified_diff_hunk_headers(strip_markdown_fence(raw_diff))
     return {
         "summary": first_text(value, "summary"),
         "diff_patch": diff_patch,
@@ -344,11 +394,71 @@ def normalize_patch_payload(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_unified_diff_hunk_headers(diff_patch: str) -> str:
+    """按 hunk 实际内容重写 unified diff 的行数声明。
+
+    LLM 生成 diff 时经常把 `@@ -0,0 +1,N @@` 中的 N 写错，但正文内容本身
+    是可审查、可应用的。hunk header 的 old/new 行数是纯格式元数据，可以用
+    本地确定性扫描修正；这里不改任何代码正文，也不补文件头或业务内容。
+    """
+
+    lines = diff_patch.splitlines()
+    if not lines:
+        return diff_patch
+
+    hunk_pattern = re.compile(
+        r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
+        r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@(?P<suffix>.*)$"
+    )
+    normalized = list(lines)
+    index = 0
+    while index < len(lines):
+        match = hunk_pattern.match(lines[index])
+        if not match:
+            index += 1
+            continue
+
+        old_seen = 0
+        new_seen = 0
+        hunk_index = index
+        index += 1
+        while index < len(lines):
+            line = lines[index]
+            if line.startswith("diff --git ") or hunk_pattern.match(line):
+                break
+            if line.startswith("\\"):
+                index += 1
+                continue
+            if line.startswith(" "):
+                old_seen += 1
+                new_seen += 1
+            elif line.startswith("-"):
+                old_seen += 1
+            elif line.startswith("+"):
+                new_seen += 1
+            elif line == "":
+                old_seen += 1
+                new_seen += 1
+            index += 1
+
+        old_start = match.group("old_start")
+        new_start = match.group("new_start")
+        suffix = match.group("suffix") or ""
+        normalized[hunk_index] = (
+            f"@@ -{old_start},{old_seen} +{new_start},{new_seen} @@{suffix}"
+        )
+
+    trailing_newline = "\n" if diff_patch.endswith("\n") else ""
+    return "\n".join(normalized) + trailing_newline
+
+
 def validate_patch_payload(value: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     diff_patch = str(value.get("diff_patch") or "")
     if not diff_patch.strip():
         issues.append("diff_patch is required")
+    if diff_patch.strip() and is_shell_command_instead_of_diff(diff_patch):
+        issues.append("diff_patch contains a shell/test command instead of a unified diff")
     if diff_patch.strip() and not looks_like_unified_diff(diff_patch):
         issues.append("diff_patch must be a unified diff")
     if diff_patch.strip():
@@ -517,6 +627,34 @@ def contains_forbidden_execution_text(text: str) -> bool:
     return any(token in lowered for token in forbidden)
 
 
+def is_shell_command_instead_of_diff(text: str) -> bool:
+    if looks_like_unified_diff(text):
+        return False
+    lines = [
+        line.lstrip("+ ").strip().casefold()
+        for line in strip_markdown_fence(text).splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return False
+    shell_markers = {"bash", "sh", "shell", "cmd", "powershell", "pwsh"}
+    command_prefixes = (
+        "node ",
+        "npm ",
+        "npx ",
+        "python ",
+        "pytest",
+        "mvn ",
+        "gradle ",
+        "java ",
+        "go test",
+        "cargo test",
+    )
+    return lines[0] in shell_markers or any(
+        line.startswith(command_prefixes) for line in lines[:4]
+    )
+
+
 def parse_diff_file_paths(diff_patch: str) -> list[str]:
     paths: list[str] = []
     for match in re.finditer(r"^diff --git\s+a/(.*?)\s+b/(.*?)$", diff_patch, re.MULTILINE):
@@ -529,7 +667,7 @@ def parse_diff_file_paths(diff_patch: str) -> list[str]:
 
 
 def strip_markdown_fence(text: str) -> str:
-    fenced = re.search(r"```(?:diff|patch)?\s*(.*?)```", text.strip(), re.IGNORECASE | re.DOTALL)
+    fenced = re.fullmatch(r"\s*```[A-Za-z0-9_-]*\s*(.*?)```\s*", text, re.IGNORECASE | re.DOTALL)
     return fenced.group(1).strip() if fenced else text
 
 

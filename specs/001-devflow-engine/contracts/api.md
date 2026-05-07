@@ -6,6 +6,14 @@
 
 控制平面由 Java Spring Boot 暴露，统一前缀为 `/api/v1`。
 
+## OpenAPI / Swagger 文档
+
+本接口契约已提供 OpenAPI 3.0 静态文档：
+
+`specs/001-devflow-engine/contracts/openapi.yaml`
+
+可以将该文件导入 Swagger Editor、Swagger UI、Postman 或 Apifox 查看和调试。当前项目尚未引入 Springdoc 运行时依赖，因此这份文档是静态契约文档；后续如果需要在 Spring Boot 中直接暴露 `/swagger-ui.html` 和 `/v3/api-docs`，可以在控制平面追加 `springdoc-openapi-starter-webmvc-ui` 依赖，并以该 YAML 为基准校对注解生成结果。
+
 ### 创建并启动流水线
 
 - 方法: `POST`

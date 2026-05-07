@@ -25,6 +25,8 @@ if (Test-Path $StateDir) {
     }
 }
 
+& (Join-Path $PSScriptRoot "stop-execution-worker.ps1") -ForceAllProjectPython
+
 foreach ($port in @(8080, 5173)) {
     Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
         Write-Host "Stopping process $($_.OwningProcess) on port $port..."

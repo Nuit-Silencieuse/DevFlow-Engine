@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +22,9 @@ else:
 APPLY_AND_RUN_TESTS = "APPLY_AND_RUN_TESTS"
 COMMAND_TIMEOUT_SECONDS = 240
 OUTPUT_LIMIT = 16_000
+GIT_APPLY_INPUT_ENCODING = "utf-8"
+EXECUTION_PLANE_ROOT = Path(__file__).resolve().parents[2]
+APPLY_DEBUG_DIR_ENV = "DEVFLOW_APPLY_DEBUG_DIR"
 logger = logging.getLogger(__name__)
 
 
@@ -172,46 +178,289 @@ def apply_patch_text(repository_path: Path, patch_name: str, patch_text: str) ->
             "stdout": "",
             "stderr": "",
             "exit_code": None,
+            "patch_line_count": 0,
         }
 
-    # 使用 git apply 而不是自定义解析 unified diff，可以复用 Git 对新增、删除、
-    # 重命名、上下文校验的成熟处理能力。这里不提交，也不修改索引，只修改工作区文件。
+    raw_patch_text = patch_text
+    patch_text = normalize_patch_for_apply(patch_text)
+    normalization_applied = patch_text != raw_patch_text
+    check_args = ["git", "apply", "--check", "--whitespace=nowarn", "-"]
+    apply_args = ["git", "apply", "--whitespace=nowarn", "-"]
+
+    # 应用阶段是最后一道保护：即使上游 Agent 已做过 diff 校验，这里仍会用本地逻辑修正
+    # hunk header 行数，并先执行 git apply --check。这样可以处理旧流水线产物、测试补丁
+    # 或人工反馈后产生的补丁，不需要再消耗 LLM token 重新生成。
     try:
-        completed = subprocess.run(
-            ["git", "apply", "--whitespace=nowarn", "-"],
+        check_completed = subprocess.run(
+            check_args,
             cwd=repository_path,
-            input=patch_text,
-            text=True,
+            input=encode_patch_input(patch_text),
+            text=False,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if check_completed.returncode != 0:
+            result = {
+                "name": patch_name,
+                "status": "FAILED",
+                "summary": "diff 预检失败，尚未修改工作区。",
+                "stdout": limit_output(decode_process_output(check_completed.stdout)),
+                "stderr": limit_output(decode_process_output(check_completed.stderr)),
+                "exit_code": check_completed.returncode,
+                "patch_line_count": count_patch_lines(raw_patch_text),
+                "normalized_patch_line_count": count_patch_lines(patch_text),
+                "normalization_applied": normalization_applied,
+            }
+            return attach_apply_diagnostics(
+                repository_path,
+                patch_name,
+                raw_patch_text,
+                check_args,
+                result,
+                normalized_patch_text=patch_text,
+            )
+
+        completed = subprocess.run(
+            apply_args,
+            cwd=repository_path,
+            input=encode_patch_input(patch_text),
+            text=False,
             capture_output=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
             check=False,
         )
     except FileNotFoundError as exc:
-        return {
+        result = {
             "name": patch_name,
             "status": "FAILED",
-            "summary": "git apply 无法执行。",
+            "summary": "无法执行 git apply。",
             "stdout": "",
             "stderr": str(exc),
             "exit_code": None,
+            "patch_line_count": count_patch_lines(raw_patch_text),
+            "normalized_patch_line_count": count_patch_lines(patch_text),
+            "normalization_applied": normalization_applied,
         }
+        return attach_apply_diagnostics(
+            repository_path,
+            patch_name,
+            raw_patch_text,
+            apply_args,
+            result,
+            normalized_patch_text=patch_text,
+        )
     except subprocess.TimeoutExpired as exc:
-        return {
+        result = {
             "name": patch_name,
             "status": "FAILED",
-            "summary": f"git apply 超过 {COMMAND_TIMEOUT_SECONDS} 秒超时。",
-            "stdout": limit_output(exc.stdout or ""),
-            "stderr": limit_output(exc.stderr or ""),
+            "summary": f"git apply 超过 {COMMAND_TIMEOUT_SECONDS} 秒后超时。",
+            "stdout": limit_output(decode_process_output(exc.stdout or b"")),
+            "stderr": limit_output(decode_process_output(exc.stderr or b"")),
             "exit_code": None,
+            "patch_line_count": count_patch_lines(raw_patch_text),
+            "normalized_patch_line_count": count_patch_lines(patch_text),
+            "normalization_applied": normalization_applied,
         }
-    return {
+        return attach_apply_diagnostics(
+            repository_path,
+            patch_name,
+            raw_patch_text,
+            apply_args,
+            result,
+            normalized_patch_text=patch_text,
+        )
+
+    result = {
         "name": patch_name,
         "status": "APPLIED" if completed.returncode == 0 else "FAILED",
         "summary": "diff 已应用。" if completed.returncode == 0 else "diff 应用失败。",
-        "stdout": limit_output(completed.stdout),
-        "stderr": limit_output(completed.stderr),
+        "stdout": limit_output(decode_process_output(completed.stdout)),
+        "stderr": limit_output(decode_process_output(completed.stderr)),
         "exit_code": completed.returncode,
+        "patch_line_count": count_patch_lines(raw_patch_text),
+        "normalized_patch_line_count": count_patch_lines(patch_text),
+        "normalization_applied": normalization_applied,
     }
+    if completed.returncode != 0:
+        return attach_apply_diagnostics(
+            repository_path,
+            patch_name,
+            raw_patch_text,
+            apply_args,
+            result,
+            normalized_patch_text=patch_text,
+        )
+    return result
+
+
+def attach_apply_diagnostics(
+    repository_path: Path,
+    patch_name: str,
+    patch_text: str,
+    command_args: list[str],
+    result: dict[str, Any],
+    *,
+    normalized_patch_text: str | None = None,
+) -> dict[str, Any]:
+    diagnostic_file = write_apply_diagnostic_file(
+        repository_path=repository_path,
+        patch_name=patch_name,
+        patch_text=patch_text,
+        command_args=command_args,
+        result=result,
+        normalized_patch_text=normalized_patch_text,
+    )
+    enriched = dict(result)
+    enriched["diagnostic_file"] = str(diagnostic_file)
+    enriched["diagnostic_summary"] = "完整补丁、git apply 输出和运行上下文已写入诊断文件。"
+    logger.warning(
+        "Patch application diagnostic written. patch=%s file=%s exit_code=%s",
+        patch_name,
+        diagnostic_file,
+        result.get("exit_code"),
+    )
+    return enriched
+
+
+def write_apply_diagnostic_file(
+    repository_path: Path,
+    patch_name: str,
+    patch_text: str,
+    command_args: list[str],
+    result: dict[str, Any],
+    *,
+    normalized_patch_text: str | None = None,
+) -> Path:
+    debug_dir = Path(os.getenv(APPLY_DEBUG_DIR_ENV) or (EXECUTION_PLANE_ROOT / "logs"))
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    safe_patch_name = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in patch_name)
+    diagnostic_file = debug_dir / f"apply-patch-failure-{safe_patch_name}-{timestamp}.json"
+
+    # 诊断文件刻意不截断 patch/stdout/stderr。它不进入 Temporal 历史，只保存在本地，
+    # 目的是让用户能直接根据 git 的 line N 定位到补丁原文中的同一行。
+    payload = {
+        "stage": APPLY_AND_RUN_TESTS,
+        "patch_name": patch_name,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "repository_root": str(repository_path),
+        "command": command_args,
+        "exit_code": result.get("exit_code"),
+        "status": result.get("status"),
+        "summary": result.get("summary"),
+        "stdout": str(result.get("stdout") or ""),
+        "stderr": str(result.get("stderr") or ""),
+        "patch_line_count": count_patch_lines(patch_text),
+        "normalized_patch_line_count": count_patch_lines(normalized_patch_text or ""),
+        "normalization_applied": bool(result.get("normalization_applied")),
+        "patch_ends_with_newline": bool(patch_text.endswith("\n")),
+        "normalized_patch_ends_with_newline": bool((normalized_patch_text or "").endswith("\n")),
+        "patch_input_encoding": GIT_APPLY_INPUT_ENCODING,
+        "patch_text": patch_text,
+        "patch_lines": numbered_patch_lines(patch_text),
+        "normalized_patch_text": normalized_patch_text or "",
+        "normalized_patch_lines": numbered_patch_lines(normalized_patch_text or ""),
+    }
+    diagnostic_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return diagnostic_file
+
+
+def normalize_patch_for_apply(patch_text: str) -> str:
+    normalized = normalize_unified_diff_hunk_headers(strip_markdown_fence(patch_text))
+    return ensure_trailing_newline(normalized)
+
+
+def strip_markdown_fence(text: str) -> str:
+    fenced = re.fullmatch(r"\s*```(?:diff|patch)?\s*(.*?)```\s*", text, re.IGNORECASE | re.DOTALL)
+    return fenced.group(1).strip() + "\n" if fenced else text
+
+
+def ensure_trailing_newline(text: str) -> str:
+    if not text:
+        return text
+    return text if text.endswith("\n") else text + "\n"
+
+
+def encode_patch_input(patch_text: str) -> bytes:
+    # Windows subprocess text mode encodes stdin with the process locale, often CP936.
+    # Git patches are byte streams, so feed UTF-8 bytes explicitly to preserve Chinese.
+    return patch_text.encode(GIT_APPLY_INPUT_ENCODING)
+
+
+def decode_process_output(output: bytes | str | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output
+    return output.decode(GIT_APPLY_INPUT_ENCODING, errors="replace")
+
+
+def normalize_unified_diff_hunk_headers(diff_patch: str) -> str:
+    """修正 unified diff 的 hunk 行数声明。
+
+    LLM 经常能生成视觉上正确的 diff，但 `@@ -a,b +c,d @@` 中的 b/d 数字不准。
+    Git 会在 hunk 结束附近报 `corrupt patch at line N`，而不是直接指出 header 错误。
+    这里只重算 header 中的 old/new 行数，不改动任何实际代码内容。
+    """
+
+    lines = diff_patch.splitlines()
+    if not lines:
+        return diff_patch
+
+    hunk_pattern = re.compile(
+        r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
+        r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@(?P<suffix>.*)$"
+    )
+    normalized = list(lines)
+    index = 0
+    while index < len(lines):
+        match = hunk_pattern.match(lines[index])
+        if not match:
+            index += 1
+            continue
+
+        old_seen = 0
+        new_seen = 0
+        hunk_index = index
+        index += 1
+        while index < len(lines):
+            line = lines[index]
+            if line.startswith("diff --git ") or hunk_pattern.match(line):
+                break
+            if line.startswith("\\"):
+                index += 1
+                continue
+            if line.startswith(" "):
+                old_seen += 1
+                new_seen += 1
+            elif line.startswith("-"):
+                old_seen += 1
+            elif line.startswith("+"):
+                new_seen += 1
+            elif line == "":
+                old_seen += 1
+                new_seen += 1
+            index += 1
+
+        old_start = match.group("old_start")
+        new_start = match.group("new_start")
+        suffix = match.group("suffix") or ""
+        normalized[hunk_index] = f"@@ -{old_start},{old_seen} +{new_start},{new_seen} @@{suffix}"
+
+    trailing_newline = "\n" if diff_patch.endswith("\n") else ""
+    return "\n".join(normalized) + trailing_newline
+
+
+def count_patch_lines(patch_text: str) -> int:
+    return len(patch_text.splitlines())
+
+
+def numbered_patch_lines(patch_text: str) -> list[dict[str, Any]]:
+    return [
+        {"line": index, "text": line}
+        for index, line in enumerate(patch_text.splitlines(), start=1)
+    ]
 
 
 def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str, Any]:
@@ -344,7 +593,7 @@ def failed_apply_result(
     summary: str,
 ) -> dict[str, Any]:
     errors = [
-        str(item.get("stderr") or item.get("summary") or "")
+        build_patch_apply_error_message(item)
         for item in patch_results
         if item.get("status") == "FAILED"
     ]
@@ -359,6 +608,14 @@ def failed_apply_result(
         "errors": [error for error in errors if error],
         "source": "apply_and_run_tests_agent",
     }
+
+
+def build_patch_apply_error_message(result: dict[str, Any]) -> str:
+    detail = str(result.get("stderr") or result.get("summary") or "").strip()
+    diagnostic_file = str(result.get("diagnostic_file") or "").strip()
+    if diagnostic_file:
+        return f"{detail}\n诊断文件: {diagnostic_file}"
+    return detail
 
 
 def build_command_error_message(result: dict[str, Any]) -> str:

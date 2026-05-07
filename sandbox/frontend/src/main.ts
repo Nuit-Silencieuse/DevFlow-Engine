@@ -72,7 +72,7 @@ app.innerHTML = `
 
         <label class="field">
           <span>新需求</span>
-          <textarea name="requirement" required>完成 DevFlow-Engine 阶段 4 的 T030 任务。请在根目录的test文件夹下生成一个简单的测试网页和插件代码。</textarea>
+          <textarea name="requirement" required>完成 DevFlow-Engine 阶段 4 的 T030 任务。请在根目录的test文件夹下生成一个简单的测试网页和插件代码，不需要很复杂，完成框架即可。</textarea>
         </label>
 
         <fieldset class="field stage-field">

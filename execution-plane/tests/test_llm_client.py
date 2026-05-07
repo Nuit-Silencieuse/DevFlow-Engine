@@ -131,6 +131,39 @@ class LlmClientTest(unittest.TestCase):
         self.assertEqual(result["summary"], "生成补丁")
         self.assertIn("diff --git", result["diff_patch"])
 
+    def test_json_parser_keeps_fenced_code_inside_json_string(self):
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=0),
+            providers={
+                "fake": FakeProvider(
+                    response_text=json.dumps(
+                        {
+                            "summary": "生成 README",
+                            "diff_patch": (
+                                "--- /dev/null\n"
+                                "+++ b/test/README.md\n"
+                                "@@ -0,0 +1,5 @@\n"
+                                "+# 插件说明\n"
+                                "+```javascript\n"
+                                "+window.DevFlowPluginHub.register('demo', plugin);\n"
+                                "+```\n"
+                            ),
+                            "changed_files": [],
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            },
+        )
+
+        result = client.complete_json(
+            LlmRequest(task="code_generation", messages=(LlmMessage("user", "x"),))
+        )
+
+        self.assertEqual(result["summary"], "生成 README")
+        self.assertIn("```javascript", result["diff_patch"])
+        self.assertIn("DevFlowPluginHub.register", result["diff_patch"])
+
     def test_trace_recorder_writes_messages_to_stdout_and_file_with_redaction(self):
         trace_path = Path(".test_tmp") / "llm-trace.jsonl"
         if trace_path.exists():
@@ -197,6 +230,7 @@ class LlmClientTest(unittest.TestCase):
             )
 
     def test_invalid_json_error_includes_response_preview_and_trace(self):
+        debug_dir = Path(".test_tmp") / "invalid-json-debug"
         recorder = LlmTraceRecorder(enabled=True)
         client = LlmClient(
             config=LlmClientConfig(
@@ -212,13 +246,20 @@ class LlmClientTest(unittest.TestCase):
             trace_recorder=recorder,
         )
 
-        with self.assertRaises(LlmJsonParseError) as raised:
-            client.complete_json(
-                LlmRequest(task="bad_json", messages=(LlmMessage("user", "x"),))
-            )
+        with unittest.mock.patch.dict(
+            os.environ,
+            {"DEVFLOW_LLM_INVALID_JSON_DIR": str(debug_dir)},
+        ):
+            with self.assertRaises(LlmJsonParseError) as raised:
+                client.complete_json(
+                    LlmRequest(task="bad_json", messages=(LlmMessage("user", "x"),))
+                )
 
-        self.assertIn("response_preview", str(raised.exception))
-        self.assertIn("+not json", str(raised.exception))
+        self.assertIn("full_response_file", str(raised.exception))
+        self.assertNotIn("[truncated]", str(raised.exception))
+        debug_file = next(debug_dir.glob("llm-invalid-json-bad_json-*.json"))
+        debug_payload = json.loads(debug_file.read_text(encoding="utf-8"))
+        self.assertIn("+not json", debug_payload["response_text"])
 
     def test_missing_provider_configuration_raises_error(self):
         client = LlmClient(

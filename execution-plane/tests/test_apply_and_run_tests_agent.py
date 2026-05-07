@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import unittest
 import uuid
 from pathlib import Path
@@ -97,6 +99,174 @@ class ApplyAndRunTestsAgentTest(unittest.TestCase):
             self.assertEqual(result["test_run_results"]["execution_results"][0]["status"], "FAILED")
             self.assertTrue(result["test_run_results"]["errors"])
             self.assertIn("执行失败", result["test_run_results"]["errors"][0])
+        finally:
+            cleanup_workspace(root)
+
+    def test_writes_patch_apply_failure_diagnostic_file(self):
+        from src.agents.apply_and_run_tests_agent import ApplyAndRunTestsAgent
+
+        root = make_workspace()
+        try:
+            corrupt_patch = (
+                "@@ -0,0 +1,2 @@\n"
+                "+one\n"
+                "+two\n"
+            )
+
+            old_debug_dir = os.environ.get("DEVFLOW_APPLY_DEBUG_DIR")
+            os.environ["DEVFLOW_APPLY_DEBUG_DIR"] = str(root / "logs")
+            try:
+                result = ApplyAndRunTestsAgent().run(
+                    {
+                        "repository_context": {"rootPath": str(root)},
+                        "diff_patch": corrupt_patch,
+                        "test_results": {"test_commands": [{"command": "python -m unittest discover -s tests"}]},
+                        "pipeline_context": {"version": 1, "code_contexts": [], "artifact_index": {}},
+                    }
+                )
+            finally:
+                if old_debug_dir is None:
+                    os.environ.pop("DEVFLOW_APPLY_DEBUG_DIR", None)
+                else:
+                    os.environ["DEVFLOW_APPLY_DEBUG_DIR"] = old_debug_dir
+
+            patch_result = result["test_run_results"]["applied_patches"][0]
+            self.assertEqual(result["test_run_results"]["status"], "FAILED")
+            self.assertEqual(patch_result["status"], "FAILED")
+            self.assertIn("diagnostic_file", patch_result)
+            self.assertIn("诊断文件:", result["test_run_results"]["errors"][0])
+
+            diagnostic_path = Path(patch_result["diagnostic_file"])
+            self.assertTrue(diagnostic_path.exists())
+            diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostic["patch_name"], "code_diff")
+            self.assertEqual(diagnostic["patch_text"], corrupt_patch)
+            self.assertTrue(diagnostic["stderr"])
+            self.assertEqual(diagnostic["patch_lines"][1]["line"], 2)
+            self.assertEqual(diagnostic["patch_lines"][1]["text"], "+one")
+        finally:
+            cleanup_workspace(root)
+
+    def test_normalizes_realistic_generated_patch_before_apply(self):
+        from src.agents.apply_and_run_tests_agent import apply_patch_text
+
+        root = make_workspace()
+        try:
+            patch_text = (
+                "diff --git a/test/index.html b/test/index.html\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/test/index.html\n"
+                "@@ -0,0 +1,13 @@\n"
+                "+<!DOCTYPE html>\n"
+                "+<html lang=\"zh-CN\">\n"
+                "+<head>\n"
+                "+    <meta charset=\"UTF-8\">\n"
+                "+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+                "+    <title>DevFlow Test Page</title>\n"
+                "+</head>\n"
+                "+<body>\n"
+                "+    <h1>DevFlow Test Environment</h1>\n"
+                "+    <p>Open the browser console to verify plugin initialization.</p>\n"
+                "+    <script type=\"module\" src=\"./plugin.js\"></script>\n"
+                "+</body>\n"
+                "+</html>\n"
+                "diff --git a/test/plugin.js b/test/plugin.js\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/test/plugin.js\n"
+                "@@ -0,0 +1,14 @@\n"
+                "+/**\n"
+                "+ * DevFlow Test Plugin\n"
+                "+ */\n"
+                "+const DevFlowTestPlugin = {\n"
+                "+    init() {\n"
+                "+        console.log('DevFlow Test Plugin Initialized');\n"
+                "+    }\n"
+                "+};\n"
+                "+\n"
+                "+export default DevFlowTestPlugin;\n"
+                "+\n"
+                "+// Auto init for smoke verification.\n"
+                "+DevFlowTestPlugin.init();\n"
+                "diff --git a/test/README.md b/test/README.md\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/test/README.md\n"
+                "@@ -0,0 +1,14 @@\n"
+                "+# DevFlow Test Infrastructure\n"
+                "+\n"
+                "+This folder provides a lightweight browser smoke test for DevFlow-Engine.\n"
+                "+\n"
+                "+## Usage\n"
+                "+\n"
+                "+1. Open `index.html` in a browser.\n"
+                "+2. Open Developer Tools.\n"
+                "+3. Confirm the console output: \"DevFlow Test Plugin Initialized\".\n"
+                "+4. Confirm `plugin.js` is loaded successfully.\n"
+                "+\n"
+                "+## 文件说明\n"
+                "+\n"
+                "+- `index.html`: 测试入口页面。\n"
+                "+- `plugin.js`: 插件逻辑代码。\n"
+            )
+
+            result = apply_patch_text(root, "code_diff", patch_text)
+
+            self.assertEqual(result["status"], "APPLIED")
+            self.assertTrue(result["normalization_applied"])
+            self.assertTrue((root / "test" / "index.html").exists())
+            self.assertTrue((root / "test" / "plugin.js").exists())
+            self.assertTrue((root / "test" / "README.md").exists())
+        finally:
+            cleanup_workspace(root)
+
+    def test_applies_patch_without_trailing_newline(self):
+        from src.agents.apply_and_run_tests_agent import apply_patch_text
+
+        root = make_workspace()
+        try:
+            patch_text = (
+                "diff --git a/demo.txt b/demo.txt\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/demo.txt\n"
+                "@@ -0,0 +1,2 @@\n"
+                "+one\n"
+                "+two"
+            )
+
+            result = apply_patch_text(root, "code_diff", patch_text)
+
+            self.assertEqual(result["status"], "APPLIED")
+            self.assertTrue(result["normalization_applied"])
+            self.assertTrue((root / "demo.txt").exists())
+            self.assertEqual((root / "demo.txt").read_text(encoding="utf-8"), "one\ntwo\n")
+        finally:
+            cleanup_workspace(root)
+
+    def test_applies_chinese_patch_as_utf8_bytes(self):
+        from src.agents.apply_and_run_tests_agent import apply_patch_text
+
+        root = make_workspace()
+        try:
+            chinese_line = "\u8bf7\u6253\u5f00\u6d4f\u89c8\u5668\u63a7\u5236\u53f0\u67e5\u770b\u63d2\u4ef6\u521d\u59cb\u5316\u65e5\u5fd7\u3002"
+            patch_text = (
+                "diff --git a/readme.md b/readme.md\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/readme.md\n"
+                "@@ -0,0 +1,1 @@\n"
+                f"+{chinese_line}\n"
+            )
+
+            result = apply_patch_text(root, "code_diff", patch_text)
+            output_path = root / "readme.md"
+
+            self.assertEqual(result["status"], "APPLIED")
+            self.assertEqual(output_path.read_text(encoding="utf-8"), chinese_line + "\n")
+            self.assertIn(chinese_line.encode("utf-8"), output_path.read_bytes())
+            self.assertNotIn(chinese_line.encode("gbk"), output_path.read_bytes())
         finally:
             cleanup_workspace(root)
 

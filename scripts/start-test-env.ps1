@@ -84,33 +84,11 @@ if (-not (Wait-Port $BackendPort 90)) {
 }
 
 Write-Host "Starting execution-plane Python Activity Worker..."
-$pythonCandidates = @(
-    (Join-Path $executionDir "venv\Scripts\python.exe"),
-    (Join-Path $executionDir "venv\python.exe"),
-    "python"
-)
-$python = $pythonCandidates | Where-Object { $_ -eq "python" -or (Test-Path $_) } | Select-Object -First 1
-
-$oldProvider = $env:DEVFLOW_LLM_PROVIDER
-$oldTrace = $env:DEVFLOW_LLM_TRACE
-if (-not $UseRealLlm) {
-    # Default test deployment uses the fake provider, so smoke tests do not need API keys or network access.
-    $env:DEVFLOW_LLM_PROVIDER = "fake"
-    $env:DEVFLOW_LLM_TRACE = "1"
+$workerArgs = @("-TemporalTarget", "localhost:7233")
+if ($UseRealLlm) {
+    $workerArgs += "-UseRealLlm"
 }
-
-$worker = Start-Process `
-    -FilePath $python `
-    -ArgumentList @("-m", "src.workers.worker") `
-    -WorkingDirectory $executionDir `
-    -RedirectStandardOutput (Join-Path $StateDir "execution-worker.out.log") `
-    -RedirectStandardError (Join-Path $StateDir "execution-worker.err.log") `
-    -PassThru `
-    -WindowStyle Hidden
-Save-Pid "execution-worker" $worker.Id
-
-$env:DEVFLOW_LLM_PROVIDER = $oldProvider
-$env:DEVFLOW_LLM_TRACE = $oldTrace
+& (Join-Path $PSScriptRoot "start-execution-worker.ps1") @workerArgs
 
 Write-Host "Starting frontend console..."
 $frontend = Start-Process `
