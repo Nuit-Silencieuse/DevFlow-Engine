@@ -5,9 +5,15 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from src.agents import ApplyAndRunTestsAgent, CoderAgent, DesignAgent, RequirementAgent, TestAgent
-from src.pipeline_context import normalize_pipeline_context
-
+from src.agents import (
+    ApplyAndRunTestsAgent,
+    CoderAgent,
+    DeliveryAgent,
+    DesignAgent,
+    RequirementAgent,
+    ReviewAgent,
+    TestAgent,
+)
 from .state import DevFlowState
 
 
@@ -53,27 +59,11 @@ def apply_and_run_tests_node(state: DevFlowState) -> DevFlowState:
 
 
 def review_code_node(state: DevFlowState) -> DevFlowState:
-    return {
-        "review_report": {
-            "status": "PENDING",
-            "summary": "Code review is reserved for the review agent implementation.",
-        },
-        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
-        "current_step": CODE_REVIEW,
-        "error_logs": state.get("error_logs", []),
-    }
+    return ReviewAgent().run(state)
 
 
 def integrate_delivery_node(state: DevFlowState) -> DevFlowState:
-    return {
-        "delivery_status": {
-            "status": "PENDING",
-            "summary": "Delivery integration is reserved for the delivery agent implementation.",
-        },
-        "pipeline_context": normalize_pipeline_context(state.get("pipeline_context")),
-        "current_step": DELIVERY_INTEGRATION,
-        "error_logs": state.get("error_logs", []),
-    }
+    return DeliveryAgent().run(state)
 
 
 STAGE_NODES: dict[str, GraphNode] = {

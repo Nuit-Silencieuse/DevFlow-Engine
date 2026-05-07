@@ -188,6 +188,8 @@ const DESIGN_ARTIFACT_KEYS = ["design_doc", "designDoc"];
 const CODE_ARTIFACT_KEYS = ["diff_patch", "diffPatch"];
 const TEST_ARTIFACT_KEYS = ["test_results", "testResults"];
 const TEST_RUN_ARTIFACT_KEYS = ["test_run_results", "testRunResults"];
+const REVIEW_ARTIFACT_KEYS = ["review_report", "reviewReport"];
+const DELIVERY_ARTIFACT_KEYS = ["delivery_status", "deliveryStatus"];
 
 export function buildStageArtifactViewModel(stage: StageStatusResponse | null): StageArtifactViewModel | null {
   if (!stage) {
@@ -221,6 +223,12 @@ export function buildStageArtifactViewModel(stage: StageStatusResponse | null): 
   if (stage.name === "APPLY_AND_RUN_TESTS") {
     return buildTestRunArtifact(selected.key, selected.value);
   }
+  if (stage.name === "CODE_REVIEW") {
+    return buildReviewArtifact(selected.key, selected.value);
+  }
+  if (stage.name === "DELIVERY_INTEGRATION") {
+    return buildDeliveryArtifact(selected.key, selected.value);
+  }
   return buildGenericArtifact(stageLabel(stage.name), selected.key, selected.value);
 }
 
@@ -237,6 +245,10 @@ function selectCoreArtifact(stage: StageStatusResponse): { key: string; value: u
             ? TEST_ARTIFACT_KEYS
             : stage.name === "APPLY_AND_RUN_TESTS"
               ? TEST_RUN_ARTIFACT_KEYS
+              : stage.name === "CODE_REVIEW"
+                ? REVIEW_ARTIFACT_KEYS
+                : stage.name === "DELIVERY_INTEGRATION"
+                  ? DELIVERY_ARTIFACT_KEYS
         : [];
 
   for (const key of preferredKeys) {
@@ -251,7 +263,9 @@ function selectCoreArtifact(stage: StageStatusResponse): { key: string; value: u
     stage.name === "SYSTEM_DESIGN" ||
     stage.name === "CODE_GENERATION" ||
     stage.name === "TEST_GENERATION" ||
-    stage.name === "APPLY_AND_RUN_TESTS"
+    stage.name === "APPLY_AND_RUN_TESTS" ||
+    stage.name === "CODE_REVIEW" ||
+    stage.name === "DELIVERY_INTEGRATION"
   ) {
     return null;
   }
@@ -314,6 +328,10 @@ function buildCodeGenerationArtifact(
   const diffText = String(value ?? "");
   const files = parseUnifiedDiff(diffText);
   const report = asRecord(output.code_generation_report);
+  const diagnostics = report.llm_diagnostics ?? report.llmDiagnostics;
+  const reportForDisplay: Record<string, unknown> = { ...report };
+  delete reportForDisplay.llm_diagnostics;
+  delete reportForDisplay.llmDiagnostics;
   return {
     title: "代码 Diff",
     sourceKey,
@@ -334,7 +352,8 @@ function buildCodeGenerationArtifact(
           { label: "片段", value: file.preview },
         ]),
       },
-      objectListSection("生成报告", report),
+      objectListSection("LLM 诊断", diagnostics),
+      objectListSection("生成报告", reportForDisplay),
     ]),
     raw: diffText,
   };
@@ -387,6 +406,56 @@ function buildTestRunArtifact(sourceKey: string, value: unknown): StageArtifactV
       objectListSection("测试命令", record.test_commands ?? record.testCommands),
       objectListSection("执行结果", record.execution_results ?? record.executionResults),
       textListSection("需要审批的阶段", record.required_approvals ?? record.requiredApprovals),
+    ]),
+    raw: value,
+  };
+}
+
+function buildReviewArtifact(sourceKey: string, value: unknown): StageArtifactViewModel {
+  const record = asRecord(value);
+  const quality = asRecord(record.quality);
+  return {
+    title: "代码评审报告",
+    sourceKey,
+    description: "只展示代码评审阶段产出的 review_report，重点呈现评审状态、问题发现、质量门禁和剩余风险。",
+    summaryFields: compactFields([
+      ["评审状态", record.status],
+      ["摘要", record.summary],
+      ["置信度", quality.confidence],
+      ["问题数", String(normalizeDisplayArray(record.findings).length)],
+    ]),
+    sections: compactSections([
+      objectListSection("评审发现", record.findings),
+      objectListSection("质量门禁", record.quality_gates ?? record.qualityGates),
+      textListSection("风险", record.risks),
+      textListSection("开放问题", record.open_questions ?? record.openQuestions),
+      objectListSection("评审计划", record.review_plan ?? record.reviewPlan),
+    ]),
+    raw: value,
+  };
+}
+
+function buildDeliveryArtifact(sourceKey: string, value: unknown): StageArtifactViewModel {
+  const record = asRecord(value);
+  const quality = asRecord(record.quality);
+  return {
+    title: "交付集成状态",
+    sourceKey,
+    description: "只展示交付集成阶段产出的 delivery_status，重点呈现最终交付状态、可查看产物、验证证据和交接检查项。",
+    summaryFields: compactFields([
+      ["交付状态", record.status],
+      ["摘要", record.summary],
+      ["置信度", quality.confidence],
+      ["产物数", String(normalizeDisplayArray(record.artifacts).length)],
+    ]),
+    sections: compactSections([
+      textListSection("交付说明", record.release_notes ?? record.releaseNotes),
+      objectListSection("产物清单", record.artifacts),
+      objectListSection("验证证据", record.verification),
+      objectListSection("交接检查项", record.handoff_checklist ?? record.handoffChecklist),
+      textListSection("风险", record.risks),
+      textListSection("开放问题", record.open_questions ?? record.openQuestions),
+      objectListSection("交付计划", record.delivery_plan ?? record.deliveryPlan),
     ]),
     raw: value,
   };
@@ -576,6 +645,13 @@ function readableLabel(key: string): string {
     mitigation: "缓解措施",
     confidence: "置信度",
     source: "来源",
+    llm_diagnostics: "LLM 诊断",
+    attempts: "尝试次数",
+    raw_model_output: "原始模型输出",
+    normalized_patch: "规范化补丁",
+    validation_report: "校验报告",
+    code_plan: "代码计划",
+    diff_patch: "Diff 补丁",
   };
   return labels[key] ?? key.replaceAll("_", " ");
 }

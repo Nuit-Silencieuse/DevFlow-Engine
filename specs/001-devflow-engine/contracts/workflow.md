@@ -101,6 +101,8 @@ T016 已在 Python Worker 中注册与 Java 方法名一致的 Activity Type:
 | `reviewCode` | `review_code` | `stageName`, `status`, `outputPayload.review_report` |
 | `integrateDelivery` | `integrate_delivery` | `stageName`, `status`, `outputPayload.delivery_status` |
 
+T026/T027 后，`reviewCode` 和 `integrateDelivery` 已不再是占位输出。`reviewCode` 输出结构化 `review_report`，状态取值为 `APPROVED`、`NEEDS_CHANGES`、`BLOCKED`；`integrateDelivery` 输出结构化 `delivery_status`，状态取值为 `READY`、`BLOCKED`、`FAILED`。这两个 Activity 都通过执行平面 Agent 产生产物，不在 Activity 内提交 Git 或发布系统。
+
 Worker 入口:
 
 `execution-plane/src/workers/worker.py`

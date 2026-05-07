@@ -204,6 +204,32 @@ function testBuildCodeGenerationArtifactShowsDiffByFile(): void {
   assert.equal(JSON.stringify(view).includes("设计文档不应作为代码生成核心产物"), false);
 }
 
+function testBuildCodeGenerationArtifactShowsLlmDiagnostics(): void {
+  const view = buildStageArtifactViewModel({
+    name: "CODE_GENERATION",
+    status: "COMPLETED",
+    requiresHumanApproval: true,
+    output: {
+      diff_patch: "",
+      code_generation_report: {
+        status: "BLOCKED",
+        summary: "无法生成代码 diff",
+        llm_diagnostics: {
+          attempts: 2,
+          raw_model_output: { diff_patch: "not a unified diff" },
+          validation_report: { issues: ["diff_patch is not a unified diff"] },
+        },
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "diff_patch");
+  assert.equal(view?.sections.some((section) => section.title === "LLM 诊断"), true);
+  assert.equal(JSON.stringify(view).includes("原始模型输出"), true);
+  assert.equal(JSON.stringify(view).includes("not a unified diff"), true);
+  assert.equal(JSON.stringify(view).includes("diff_patch is not a unified diff"), true);
+}
+
 function testParseUnifiedDiffForDisplayKeepsFullDiff(): void {
   const longBody = Array.from({ length: 30 }, (_, index) => `+line_${index + 1}`).join("\n");
   const files = parseUnifiedDiffForDisplay(
@@ -282,6 +308,72 @@ function testBuildApplyAndRunTestsArtifactShowsManualAction(): void {
   assert.equal(JSON.stringify(view).includes("boom"), true);
 }
 
+function testBuildReviewArtifactShowsReviewReportOnly(): void {
+  const view = buildStageArtifactViewModel({
+    name: "CODE_REVIEW",
+    status: "COMPLETED",
+    requiresHumanApproval: false,
+    output: {
+      test_results: { summary: "should not be selected" },
+      review_report: {
+        status: "NEEDS_CHANGES",
+        summary: "发现一个高风险问题。",
+        findings: [
+          {
+            severity: "HIGH",
+            file_path: "src/app.py",
+            line: 42,
+            description: "异常处理缺失。",
+            recommendation: "补充失败分支。",
+          },
+        ],
+        quality_gates: [{ name: "tests", status: "PASSED", evidence: "python -m unittest" }],
+        risks: ["需要补充回归测试"],
+        open_questions: ["是否需要兼容旧数据"],
+        quality: { confidence: "MEDIUM" },
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "review_report");
+  assert.equal(view?.title, "代码评审报告");
+  assert.equal(view?.summaryFields.some((field) => field.label === "评审状态" && field.value === "NEEDS_CHANGES"), true);
+  assert.equal(view?.sections.some((section) => section.title === "评审发现"), true);
+  assert.equal(view?.sections.some((section) => section.title === "质量门禁"), true);
+  assert.equal(JSON.stringify(view).includes("src/app.py"), true);
+  assert.equal(JSON.stringify(view).includes("should not be selected"), false);
+}
+
+function testBuildDeliveryArtifactShowsDeliveryStatusOnly(): void {
+  const view = buildStageArtifactViewModel({
+    name: "DELIVERY_INTEGRATION",
+    status: "COMPLETED",
+    requiresHumanApproval: false,
+    output: {
+      review_report: { summary: "should not be selected" },
+      delivery_status: {
+        status: "READY",
+        summary: "测试通过且评审批准，可以交付。",
+        release_notes: ["新增交付集成 Agent。"],
+        artifacts: [{ name: "code_diff", type: "diff", status: "READY" }],
+        verification: [{ name: "unit_tests", status: "PASSED", evidence: "python -m unittest" }],
+        handoff_checklist: [{ item: "确认评审结论", status: "DONE" }],
+        risks: [],
+        open_questions: [],
+        quality: { confidence: "HIGH" },
+      },
+    },
+  });
+
+  assert.equal(view?.sourceKey, "delivery_status");
+  assert.equal(view?.title, "交付集成状态");
+  assert.equal(view?.summaryFields.some((field) => field.label === "交付状态" && field.value === "READY"), true);
+  assert.equal(view?.sections.some((section) => section.title === "交付说明"), true);
+  assert.equal(view?.sections.some((section) => section.title === "交接检查项"), true);
+  assert.equal(JSON.stringify(view).includes("code_diff"), true);
+  assert.equal(JSON.stringify(view).includes("should not be selected"), false);
+}
+
 function main(): void {
   testBuildCreateRequestOmitsEmptyRepository();
   testBuildCreateRequestNormalizesRepositoryContext();
@@ -291,9 +383,12 @@ function main(): void {
   testBuildRequirementArtifactShowsOnlyStructuredPrd();
   testBuildDesignArtifactShowsOnlyDesignDoc();
   testBuildCodeGenerationArtifactShowsDiffByFile();
+  testBuildCodeGenerationArtifactShowsLlmDiagnostics();
   testParseUnifiedDiffForDisplayKeepsFullDiff();
   testBuildTestGenerationArtifactShowsCodeAndExecutionResults();
   testBuildApplyAndRunTestsArtifactShowsManualAction();
+  testBuildReviewArtifactShowsReviewReportOnly();
+  testBuildDeliveryArtifactShowsDeliveryStatusOnly();
 }
 
 main();

@@ -167,14 +167,25 @@ class LlmClient:
 
 
 def parse_json_response(text: str, repair_attempts: int = 1) -> dict[str, Any]:
-    candidates = [extract_json_text(text)]
+    extracted = extract_json_text(text)
+    candidates = [extracted]
     if repair_attempts > 0:
-        candidates.append(repair_json_text(candidates[0]))
+        candidates.extend(
+            [
+                repair_json_text(extracted),
+                escape_control_chars_in_json_strings(extracted),
+                repair_json_text(escape_control_chars_in_json_strings(extracted)),
+                repair_json_text(unescape_json_shell_text(extracted)),
+                repair_json_text(
+                    escape_control_chars_in_json_strings(unescape_json_shell_text(extracted))
+                ),
+            ]
+        )
 
     last_error: Exception | None = None
-    for candidate in candidates:
+    for candidate in ordered_unique_texts(candidates):
         try:
-            parsed = json.loads(candidate)
+            parsed = parse_json_candidate(candidate)
             if not isinstance(parsed, dict):
                 raise LlmJsonParseError("LLM JSON response root must be an object")
             return parsed
@@ -184,6 +195,15 @@ def parse_json_response(text: str, repair_attempts: int = 1) -> dict[str, Any]:
     raise LlmJsonParseError(
         f"LLM response is not valid JSON: {last_error}; response_preview={preview!r}"
     ) from last_error
+
+
+def parse_json_candidate(text: str) -> Any:
+    parsed = json.loads(text)
+    if isinstance(parsed, str):
+        nested = parsed.strip()
+        if nested.startswith("{") and nested.endswith("}"):
+            return json.loads(escape_control_chars_in_json_strings(nested))
+    return parsed
 
 
 def response_preview(text: str, limit: int = 240) -> str:
@@ -221,6 +241,79 @@ def repair_json_text(text: str) -> str:
     if start != -1 and end != -1 and start < end:
         repaired = repaired[start : end + 1]
     return repaired
+
+
+def escape_control_chars_in_json_strings(text: str) -> str:
+    """只修复 JSON 字符串内部的裸控制字符。
+
+    代码生成阶段的 `diff_patch` 很长，部分模型会把 diff 中的真实换行直接放进
+    JSON 字符串，导致 `json.loads` 报 `Invalid control character`。这里通过
+    字符级扫描只处理已经进入字符串后的换行、回车和制表符，不改变 JSON 对象
+    外部的格式，也不补任何业务字段。
+    """
+
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                result.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                result.append(char)
+                escaped = True
+                continue
+            if char == '"':
+                result.append(char)
+                in_string = False
+                continue
+            if char == "\n":
+                result.append("\\n")
+                continue
+            if char == "\r":
+                result.append("\\r")
+                continue
+            if char == "\t":
+                result.append("\\t")
+                continue
+            result.append(char)
+            continue
+
+        result.append(char)
+        if char == '"':
+            in_string = True
+    return "".join(result)
+
+
+def unescape_json_shell_text(text: str) -> str:
+    """处理模型把 JSON 对象外壳二次转义的情况。
+
+    某些 OpenAI-compatible 服务在 JSON mode 下会返回形如
+    `{\\n  \"summary\": \"...\"}` 的文本。它看起来是 JSON，但对象外层的
+    换行和引号都被多转义了一次。该修复只作为普通解析失败后的候选路径。
+    """
+
+    stripped = text.strip()
+    if '\\"' not in stripped and "\\n" not in stripped:
+        return stripped
+    return (
+        stripped.replace('\\"', '"')
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+    )
+
+
+def ordered_unique_texts(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def response_to_trace_payload(request: LlmRequest, response: LlmResponse) -> dict[str, Any]:

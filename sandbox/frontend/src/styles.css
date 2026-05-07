@@ -468,6 +468,36 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.artifact-value-pill {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 26px;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 800;
+}
+
+.artifact-value-pill.tone-success {
+  color: #0f5132;
+  background: #dff8e7;
+}
+
+.artifact-value-pill.tone-warning {
+  color: #8a4b00;
+  background: #fff0cc;
+}
+
+.artifact-value-pill.tone-danger {
+  color: #842029;
+  background: #fde2e1;
+}
+
+.artifact-value-pill.tone-neutral {
+  color: #425466;
+  background: #e7edf4;
+}
+
 .diff-section {
   gap: 12px;
 }

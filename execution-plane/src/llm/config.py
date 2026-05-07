@@ -15,6 +15,8 @@ DEFAULT_TASK_TIMEOUT_SECONDS = {
     "system_design": 360.0,
     "code_generation": 240.0,
     "test_generation": 240.0,
+    "code_review": 240.0,
+    "delivery_integration": 240.0,
 }
 
 

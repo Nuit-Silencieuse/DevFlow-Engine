@@ -184,6 +184,7 @@ class CoderAgentTest(unittest.TestCase):
         self.assertIn("design_doc is required", result["error_logs"][0])
         self.assertEqual(result["diff_patch"], "")
         self.assertEqual(result["code_generation_report"]["status"], "BLOCKED")
+        self.assertIn("design_doc", result["code_generation_report"]["open_questions"][0])
 
     def test_invalid_hunk_line_count_is_blocked_before_apply_stage(self):
         from src.agents.coder_agent import CoderAgent
@@ -209,7 +210,15 @@ index 0000000..1111111
         self.assertEqual(result["current_step"], "CODE_GENERATION")
         self.assertEqual(result["diff_patch"], "")
         self.assertEqual(result["code_generation_report"]["status"], "BLOCKED")
+        self.assertIn("补丁未通过结构校验", result["code_generation_report"]["summary"])
+        self.assertIn("raw_model_output", result["code_generation_report"]["open_questions"][0])
         self.assertIn("declares -0/+3 lines but contains -0/+2 lines", result["error_logs"][0])
+        diagnostics = result["code_generation_report"]["llm_diagnostics"]
+        self.assertIn("raw_model_output", diagnostics)
+        self.assertIn("normalized_patch", diagnostics)
+        self.assertIn("validation_report", diagnostics)
+        self.assertIn("diff_patch", diagnostics["raw_model_output"])
+        self.assertIn("declares -0/+3 lines", diagnostics["validation_report"]["issues"][0])
 
     def test_flow_node_invokes_coder_agent(self):
         from src.graph.flow import generate_code_node

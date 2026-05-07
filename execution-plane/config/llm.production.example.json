@@ -8,7 +8,9 @@
     "requirement_analysis": 180,
     "system_design": 360,
     "code_generation": 240,
-    "test_generation": 240
+    "test_generation": 240,
+    "code_review": 240,
+    "delivery_integration": 240
   },
   "maxRetries": 2,
   "jsonRepairAttempts": 1,

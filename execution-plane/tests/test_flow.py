@@ -90,6 +90,32 @@ class StubApplyAndRunTestsAgent:
         }
 
 
+class StubReviewAgent:
+    def run(self, state):
+        return {
+            "review_report": {
+                "status": "APPROVED",
+                "source": "review_agent",
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "CODE_REVIEW",
+            "error_logs": state.get("error_logs", []),
+        }
+
+
+class StubDeliveryAgent:
+    def run(self, state):
+        return {
+            "delivery_status": {
+                "status": "READY",
+                "source": "delivery_agent",
+            },
+            "pipeline_context": state.get("pipeline_context", {}),
+            "current_step": "DELIVERY_INTEGRATION",
+            "error_logs": state.get("error_logs", []),
+        }
+
+
 class DevFlowGraphTest(unittest.TestCase):
     def test_graph_runs_all_pipeline_nodes_in_order(self):
         with patch("src.graph.flow.RequirementAgent", StubRequirementAgent), patch(
@@ -100,6 +126,10 @@ class DevFlowGraphTest(unittest.TestCase):
             "src.graph.flow.TestAgent", StubTestAgent
         ), patch(
             "src.graph.flow.ApplyAndRunTestsAgent", StubApplyAndRunTestsAgent
+        ), patch(
+            "src.graph.flow.ReviewAgent", StubReviewAgent
+        ), patch(
+            "src.graph.flow.DeliveryAgent", StubDeliveryAgent
         ):
             graph = build_devflow_graph()
             result = graph.invoke({"original_requirement": "实现用户登录、注册和鉴权"})

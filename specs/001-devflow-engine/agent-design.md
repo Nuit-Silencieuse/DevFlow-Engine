@@ -542,13 +542,67 @@ Prompt 与校验约束:
 
 `CODE_REVIEW`
 
-职责:
+实现状态:
 
-- 审查 `diff_patch` 的正确性、安全性和可维护性。
-- 结合 `test_results` 判断变更是否可进入交付。
-- 输出按严重程度排序的审查报告。
+T026 已新增 `ReviewAgent`，并将 `flow.py` 的 `review_code_node` 从占位结果替换为 `ReviewAgent().run(state)`。
 
-输出写入 `review_report`，其中 `status` 可以是 `APPROVED`、`CHANGES_REQUESTED` 或 `BLOCKED`。
+子图节点顺序:
+
+```text
+prepare_input
+  -> plan_review
+  -> draft_review_report
+  -> validate_review_report
+  -> repair_review_report?   # 仅在结构可修复时执行
+  -> finalize | fail_soft
+```
+
+核心输入:
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `diff_patch` | 是 | CoderAgent 输出的代码 unified diff，是评审的主要证据 |
+| `code_generation_report` | 否 | 变更文件、风险和代码生成质量摘要 |
+| `test_results` | 否 | TestAgent 生成的测试补丁、测试文件和测试命令 |
+| `test_run_results` | 否 | APPLY_AND_RUN_TESTS 的真实执行结果；缺失时评审会降低置信度 |
+| `structured_prd` / `design_doc` | 否 | 用于核对需求覆盖、设计约束和文件计划 |
+| `human_feedback` | 否 | 人工反馈会进入评审 Prompt |
+
+输出写入 `review_report`:
+
+```json
+{
+  "status": "APPROVED | NEEDS_CHANGES | BLOCKED",
+  "summary": "评审摘要",
+  "findings": [
+    {
+      "severity": "HIGH | MEDIUM | LOW",
+      "file_path": "可选文件路径",
+      "line": 12,
+      "description": "问题说明",
+      "recommendation": "修复建议"
+    }
+  ],
+  "quality_gates": [
+    {
+      "name": "tests",
+      "status": "PASSED | FAILED | BLOCKED",
+      "evidence": "测试命令或评审证据"
+    }
+  ],
+  "risks": [],
+  "open_questions": [],
+  "review_plan": {},
+  "source": "review_agent"
+}
+```
+
+失败策略:
+
+- 缺少 `diff_patch` 时直接进入 `fail_soft`，输出 `BLOCKED`，不调用 LLM，避免对不存在的补丁做伪评审。
+- `test_run_results` 缺失只记录 warning；评审仍可进行，但 Prompt 明确要求不能把未运行测试的变更评为无风险。
+- LLM 输出结构不完整时，先执行一次结构归一化修复；如果仍缺少 `summary`、`quality_gates` 或必要 findings，则输出 `BLOCKED`。
+- `review_report` 会写入 `pipeline_context.artifact_index.CODE_REVIEW.review_report`，供交付阶段和前端展示复用。
 
 ## T027: Delivery Agent
 
@@ -560,13 +614,60 @@ Prompt 与校验约束:
 
 `DELIVERY_INTEGRATION`
 
-职责:
+实现状态:
 
-- 根据评审结果整理交付状态。
-- 生成交付摘要、变更清单和后续操作建议。
-- 为后续 MR/PR 创建逻辑提供结构化输入。
+T027 已新增 `DeliveryAgent`，并将 `flow.py` 的 `integrate_delivery_node` 从占位结果替换为 `DeliveryAgent().run(state)`。
 
-输出写入 `delivery_status`，其中 `status` 可以是 `READY`、`BLOCKED` 或 `PENDING`。
+子图节点顺序:
+
+```text
+prepare_input
+  -> plan_delivery
+  -> draft_delivery_status
+  -> validate_delivery_status
+  -> repair_delivery_status? # 仅在结构可修复时执行
+  -> finalize | fail_soft
+```
+
+核心输入:
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `review_report` | 是 | ReviewAgent 的结论；缺失时交付状态保持 `BLOCKED` |
+| `test_run_results` | 否 | 真实测试执行结果，用于判断 `READY` 门禁 |
+| `test_results` | 否 | 测试补丁和命令计划，作为交付证据补充 |
+| `diff_patch` / `code_generation_report` | 否 | 交付摘要、产物索引和变更清单的来源 |
+| `structured_prd` / `design_doc` | 否 | 用于生成面向用户的 release notes 和检查项 |
+
+输出写入 `delivery_status`:
+
+```json
+{
+  "status": "READY | BLOCKED | FAILED",
+  "summary": "交付状态摘要",
+  "release_notes": ["用户可读的变更说明"],
+  "artifacts": [
+    {"name": "code_diff", "type": "diff", "status": "READY"}
+  ],
+  "verification": [
+    {"name": "unit_tests", "status": "PASSED", "evidence": "python -m unittest"}
+  ],
+  "handoff_checklist": [
+    {"item": "确认评审结论", "status": "DONE"}
+  ],
+  "risks": [],
+  "open_questions": [],
+  "delivery_plan": {},
+  "source": "delivery_agent"
+}
+```
+
+失败策略:
+
+- 缺少 `review_report` 时直接进入 `fail_soft`，输出 `BLOCKED`，不调用 LLM。
+- `plan_delivery.ready_gate` 只有在 `test_run_results.status == PASSED` 且 `review_report.status == APPROVED` 时才为真。
+- `validate_delivery_status` 会阻止模型在门禁未通过时输出 `READY`。
+- 输出会写入 `pipeline_context.artifact_index.DELIVERY_INTEGRATION.delivery_status`，作为控制台最终交付视图的数据源。
 
 ## Agent 与 LangGraph 的集成方式
 

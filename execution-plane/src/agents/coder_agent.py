@@ -221,14 +221,23 @@ class CoderAgent:
         errors = errors + validation_issues if validation_issues else errors
         errors = errors or ["code generation failed"]
         logger.warning("CoderAgent entered fail_soft. errors=%s", errors)
+        missing_design_doc = any("design_doc is required" in error for error in errors)
         report = {
             "status": "BLOCKED",
-            "summary": "无法生成代码 diff，缺少必要设计产物或 LLM 返回的补丁格式不可用。",
+            "summary": (
+                "无法生成代码 diff，缺少必要设计产物。"
+                if missing_design_doc
+                else "无法生成代码 diff，LLM 返回的补丁未通过结构校验。"
+            ),
             "changed_files": [],
             "risks": ["CODE_GENERATION 阶段未产出可审查 diff，后续测试生成不应继续依赖该结果。"],
-            "open_questions": ["请确认 SYSTEM_DESIGN 阶段已生成完整 design_doc，并重新执行代码生成。"],
+            "open_questions": build_blocked_open_questions(
+                missing_design_doc=missing_design_doc,
+                validation_issues=validation_issues,
+            ),
             "feedback": state.get("feedback_text", ""),
             "quality": {"confidence": "LOW"},
+            "llm_diagnostics": build_llm_diagnostics(state),
             "source": "coder_agent",
         }
         pipeline_context = append_stage_code_context(
@@ -305,8 +314,11 @@ def build_coder_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
             role="system",
             content=(
                 "你是 DevFlow Engine 的 Coder Agent。只输出符合 schema 的 JSON。"
+                "必须返回 JSON 对象本身，首字符必须是 {，不能把整个 JSON 对象作为字符串返回。"
+                "不要输出 Markdown、代码围栏、前后解释、注释或自然语言前缀。"
                 "输出语言必须遵守 user payload 中的 response_language；中文需求使用简体中文描述 summary、risks、open_questions。"
                 "核心产物 diff_patch 必须是 unified diff，不要使用 JSON Patch。"
+                "diff_patch 是 JSON 字符串字段，内部换行必须由 JSON 编码正确转义，不能破坏外层 JSON。"
                 "只生成 unified diff；不能写入文件；不能执行 git；不能运行 shell 命令。"
                 "diff 必须尽量小，只覆盖 design_doc.file_plan 指定或代码证据明确支持的文件。"
                 "如果缺少必要文件内容，不要猜测完整实现，应在 open_questions 中说明阻塞点。"
@@ -372,6 +384,49 @@ def build_code_generation_report(
         },
         "source": "coder_agent",
     }
+
+
+def build_llm_diagnostics(state: CoderAgentState) -> dict[str, Any]:
+    """构造给前端和日志排查使用的失败诊断快照。
+
+    CoderAgent 的失败经常发生在 LLM 已经返回 JSON、但 `diff_patch` 不是合法
+    unified diff 的场景。过去报告只写 `BLOCKED`，用户无法判断模型到底返回了
+    空补丁、Markdown、损坏 hunk，还是根本没有按 schema 输出。这里把关键中间
+    产物带出去，同时对字符串做长度限制，避免把超大 diff 塞进 Temporal payload。
+    """
+
+    return {
+        "attempts": int(state.get("attempts", 0)),
+        "raw_model_output": redact_large_strings(state.get("draft_patch") or {}),
+        "normalized_patch": redact_large_strings(state.get("normalized_patch") or {}),
+        "validation_report": redact_large_strings(state.get("validation_report") or {}),
+        "code_plan": redact_large_strings(state.get("code_plan") or {}),
+    }
+
+
+def build_blocked_open_questions(
+    *,
+    missing_design_doc: bool,
+    validation_issues: list[str],
+) -> list[str]:
+    if missing_design_doc:
+        return ["请确认 SYSTEM_DESIGN 阶段已生成完整 design_doc，并重新执行代码生成。"]
+    if validation_issues:
+        return [
+            "请查看 code_generation_report.llm_diagnostics.raw_model_output，确认模型返回的 diff_patch 是否为空、不是 unified diff，或 hunk 行数不一致。",
+            "如 validation_report.issues 指向 corrupt hunk，可要求模型缩小变更范围后重试，或改用更强的代码生成模型。",
+        ]
+    return ["请查看 code_generation_report.llm_diagnostics，确认 CoderAgent 在哪个步骤没有获得有效补丁。"]
+
+
+def redact_large_strings(value: Any, *, limit: int = 60000) -> Any:
+    if isinstance(value, dict):
+        return {str(key): redact_large_strings(item, limit=limit) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_large_strings(item, limit=limit) for item in value]
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + f"\n...[truncated {len(value) - limit} chars]"
+    return value
 
 
 def summarize_code_context(code_context: dict[str, Any]) -> dict[str, Any]:

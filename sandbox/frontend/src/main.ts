@@ -490,9 +490,39 @@ function renderField(label: string, value: string): HTMLElement {
   const labelElement = document.createElement("span");
   labelElement.textContent = label;
   const valueElement = document.createElement("p");
+  const toneClass = artifactValueToneClass(label, value);
+  if (toneClass) {
+    valueElement.classList.add("artifact-value-pill", toneClass);
+  }
   valueElement.textContent = value;
   row.append(labelElement, valueElement);
   return row;
+}
+
+function artifactValueToneClass(label: string, value: string): string | null {
+  const normalizedLabel = label.toLowerCase();
+  const normalizedValue = value.toUpperCase();
+  const isStatusLike =
+    normalizedLabel.includes("status") ||
+    normalizedLabel.includes("状态") ||
+    normalizedLabel.includes("严重") ||
+    normalizedLabel.includes("severity");
+  if (!isStatusLike || value.includes("\n")) {
+    return null;
+  }
+  if (["READY", "APPROVED", "PASSED", "DONE", "GENERATED"].includes(normalizedValue)) {
+    return "tone-success";
+  }
+  if (["NEEDS_CHANGES", "BLOCKED", "SUSPENDED", "NOT_RUN", "MANUAL_ACTION_REQUIRED", "MEDIUM"].includes(normalizedValue)) {
+    return "tone-warning";
+  }
+  if (["FAILED", "REJECTED", "HIGH"].includes(normalizedValue)) {
+    return "tone-danger";
+  }
+  if (["LOW"].includes(normalizedValue)) {
+    return "tone-neutral";
+  }
+  return null;
 }
 
 function renderDiffFiles(files: CodeDiffFile[], title = "Diff 文件"): HTMLElement {

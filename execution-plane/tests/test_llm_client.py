@@ -87,6 +87,50 @@ class LlmClientTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "READY")
 
+    def test_json_parser_repairs_unescaped_newlines_inside_diff_string(self):
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=0),
+            providers={
+                "fake": FakeProvider(
+                    response_text='{\n'
+                    '  "summary": "生成补丁",\n'
+                    '  "diff_patch": "diff --git a/a.py b/a.py\n'
+                    '--- a/a.py\n'
+                    '+++ b/a.py\n'
+                    '@@ -1 +1 @@\n'
+                    '-old\n'
+                    '+new\n'
+                    '",\n'
+                    '  "changed_files": []\n'
+                    '}'
+                )
+            },
+        )
+
+        result = client.complete_json(
+            LlmRequest(task="code_generation", messages=(LlmMessage("user", "x"),))
+        )
+
+        self.assertIn("diff --git", result["diff_patch"])
+        self.assertIn("+new", result["diff_patch"])
+
+    def test_json_parser_repairs_double_escaped_json_object_shell(self):
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=0),
+            providers={
+                "fake": FakeProvider(
+                    response_text='{\\n  \\"summary\\": \\"生成补丁\\",\\n  \\"diff_patch\\": \\"diff --git a/a.py b/a.py\\n--- a/a.py\\n+++ b/a.py\\n@@ -1 +1 @@\\n-old\\n+new\\n\\",\\n  \\"changed_files\\": []\\n}'
+                )
+            },
+        )
+
+        result = client.complete_json(
+            LlmRequest(task="code_generation", messages=(LlmMessage("user", "x"),))
+        )
+
+        self.assertEqual(result["summary"], "生成补丁")
+        self.assertIn("diff --git", result["diff_patch"])
+
     def test_trace_recorder_writes_messages_to_stdout_and_file_with_redaction(self):
         trace_path = Path(".test_tmp") / "llm-trace.jsonl"
         if trace_path.exists():

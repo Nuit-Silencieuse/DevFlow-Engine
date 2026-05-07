@@ -234,8 +234,16 @@ result_state = run_stage("SYSTEM_DESIGN", state)
 | `generate_code_node` | `diff_patch`, `code_generation_report`, `current_step`, `error_logs` | 已调用 T024 CoderAgent，通过 LLM Client 生成可审查 unified diff，不直接写文件或提交 Git |
 | `generate_tests_node` | `test_results`, `current_step`, `error_logs` | 已调用 T025 TestAgent，通过 LLM Client 生成测试补丁、测试命令和执行结果记录 |
 | `apply_and_run_tests_node` | `test_run_results`, `current_step`, `error_logs` | 当前不启用沙箱执行，只返回人工应用补丁和手动运行测试的结构化操作要求 |
-| `review_code_node` | `review_report`, `current_step`, `error_logs` | 写入代码评审占位状态，等待 T026 Review Agent |
-| `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 写入交付集成占位状态，等待 T027 Delivery Agent |
+| `review_code_node` | `review_report`, `current_step`, `error_logs` | 已调用 T026 ReviewAgent，基于 diff、测试结果和执行结果生成结构化评审报告 |
+| `integrate_delivery_node` | `delivery_status`, `current_step`, `error_logs` | 已调用 T027 DeliveryAgent，整合补丁、测试和评审结论生成最终交付状态 |
+
+### T026/T027 真实 Agent 子图
+
+`ReviewAgent` 绑定 `CODE_REVIEW`，子图顺序为 `prepare_input -> plan_review -> draft_review_report -> validate_review_report -> repair_review_report? -> finalize | fail_soft`。它消费 `diff_patch`、`code_generation_report`、`test_results` 和 `test_run_results`，产出 `review_report`。缺少 `diff_patch` 时直接输出 `BLOCKED`，缺少真实测试执行结果时记录 warning 并要求 LLM 在评审中说明验证不完整。
+
+`DeliveryAgent` 绑定 `DELIVERY_INTEGRATION`，子图顺序为 `prepare_input -> plan_delivery -> draft_delivery_status -> validate_delivery_status -> repair_delivery_status? -> finalize | fail_soft`。它消费 `review_report`、测试执行结果和代码产物，产出 `delivery_status`。`plan_delivery.ready_gate` 只有在测试通过且评审批准时才为真；校验阶段会阻止模型在门禁未通过时输出 `READY`。
+
+两者都通过统一 `LlmClient` 调用模型，不在 Agent 内写文件、提交 Git 或执行部署命令。结构化产物会写入 `pipeline_context.artifact_index`，便于控制台和后续阶段复用。
 
 当前每个节点都返回增量字典，而不是直接修改输入对象。这样更符合 LangGraph 的状态更新模型，也便于后续替换为真实 Agent。
 
