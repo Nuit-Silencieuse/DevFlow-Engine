@@ -318,6 +318,16 @@ def build_test_messages(state: TestAgentState) -> tuple[LlmMessage, ...]:
                 "不要输出 execution_results；真实测试执行结果只由后续 APPLY_AND_RUN_TESTS 阶段产出。"
             ),
         ),
+        LlmMessage(
+            role="system",
+            content=(
+                "test_commands 必须使用结构化命令格式：command 只能包含单个可执行命令及参数，"
+                "不得包含 cd、&&、||、;、|、>、< 或 shell 脚本片段。"
+                "如果需要进入子目录执行，例如 demo 下的 npm test，请输出 "
+                "{\"command\":\"npm test\",\"working_directory\":\"demo\"}。"
+                "依赖安装和测试运行要拆成两个 test_commands 条目。"
+            ),
+        ),
         LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
     )
 
@@ -494,7 +504,25 @@ TEST_RESULTS_SCHEMA = {
                 },
             },
         },
-        "test_commands": {"type": "array"},
+        "test_commands": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["command", "purpose"],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Single executable command and args only; no cd, &&, pipes, redirects, or shell scripts.",
+                    },
+                    "working_directory": {
+                        "type": "string",
+                        "description": "Optional safe relative directory under repository root, for example demo.",
+                    },
+                    "purpose": {"type": "string"},
+                    "expected_result": {"type": "string"},
+                },
+            },
+        },
         "coverage_focus": {"type": "array", "items": {"type": "string"}},
         "risks": {"type": "array", "items": {"type": "string"}},
         "open_questions": {"type": "array", "items": {"type": "string"}},

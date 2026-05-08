@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import unittest
 import uuid
 from pathlib import Path
@@ -99,6 +100,61 @@ class ApplyAndRunTestsAgentTest(unittest.TestCase):
             self.assertEqual(result["test_run_results"]["execution_results"][0]["status"], "FAILED")
             self.assertTrue(result["test_run_results"]["errors"])
             self.assertIn("执行失败", result["test_run_results"]["errors"][0])
+        finally:
+            cleanup_workspace(root)
+
+    def test_runs_test_command_with_structured_working_directory(self):
+        from src.agents.apply_and_run_tests_agent import run_test_command
+
+        root = make_workspace()
+        try:
+            demo = root / "demo"
+            demo.mkdir()
+            (demo / "check_cwd.py").write_text(
+                "from pathlib import Path\n"
+                "Path('cwd-marker.txt').write_text('ok', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            result = run_test_command(
+                root,
+                {
+                    "command": f"{sys.executable} check_cwd.py",
+                    "working_directory": "demo",
+                    "purpose": "verify structured cwd",
+                },
+            )
+
+            self.assertEqual(result["status"], "PASSED")
+            self.assertEqual(result["working_directory"], "demo")
+            self.assertTrue((demo / "cwd-marker.txt").exists())
+            self.assertFalse((root / "cwd-marker.txt").exists())
+        finally:
+            cleanup_workspace(root)
+
+    def test_normalizes_simple_cd_and_command_without_shell_execution(self):
+        from src.agents.apply_and_run_tests_agent import normalize_test_commands, run_test_command
+
+        root = make_workspace()
+        try:
+            demo = root / "demo"
+            demo.mkdir()
+            (demo / "check_cwd.py").write_text(
+                "from pathlib import Path\n"
+                "Path('legacy-marker.txt').write_text('ok', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            commands = normalize_test_commands(
+                [{"command": f"cd demo && {sys.executable} check_cwd.py"}]
+            )
+            result = run_test_command(root, commands[0])
+
+            self.assertEqual(commands[0]["working_directory"], "demo")
+            self.assertEqual(commands[0]["command"], f"{sys.executable} check_cwd.py")
+            self.assertEqual(result["status"], "PASSED")
+            self.assertEqual(result["working_directory"], "demo")
+            self.assertTrue((demo / "legacy-marker.txt").exists())
         finally:
             cleanup_workspace(root)
 

@@ -464,10 +464,11 @@ def numbered_patch_lines(patch_text: str) -> list[dict[str, Any]]:
 
 
 def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str, Any]:
-    command_text = str(command.get("command") or "").strip()
+    normalized_command = normalize_test_command_for_execution(command)
+    command_text = str(normalized_command.get("command") or "").strip()
     if not command_text:
         return {
-            **command,
+            **normalized_command,
             "status": "BLOCKED",
             "exit_code": None,
             "stdout": "",
@@ -477,9 +478,10 @@ def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str
 
     try:
         args = split_command(command_text)
+        command_cwd = resolve_command_working_directory(repository_path, normalized_command)
     except ValueError as exc:
         return {
-            **command,
+            **normalized_command,
             "status": "BLOCKED",
             "exit_code": None,
             "stdout": "",
@@ -491,7 +493,7 @@ def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str
     try:
         completed = subprocess.run(
             normalize_windows_executable(args),
-            cwd=repository_path,
+            cwd=command_cwd,
             text=True,
             capture_output=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
@@ -499,8 +501,9 @@ def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str
         )
         duration_ms = int((time.monotonic() - start) * 1000)
         return {
-            **command,
+            **normalized_command,
             "command": command_text,
+            "working_directory": relative_working_directory(repository_path, command_cwd),
             "status": "PASSED" if completed.returncode == 0 else "FAILED",
             "exit_code": completed.returncode,
             "stdout": limit_output(completed.stdout),
@@ -510,8 +513,9 @@ def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str
     except FileNotFoundError as exc:
         duration_ms = int((time.monotonic() - start) * 1000)
         return {
-            **command,
+            **normalized_command,
             "command": command_text,
+            "working_directory": relative_working_directory(repository_path, command_cwd),
             "status": "BLOCKED",
             "exit_code": None,
             "stdout": "",
@@ -521,8 +525,9 @@ def run_test_command(repository_path: Path, command: dict[str, Any]) -> dict[str
     except subprocess.TimeoutExpired as exc:
         duration_ms = int((time.monotonic() - start) * 1000)
         return {
-            **command,
+            **normalized_command,
             "command": command_text,
+            "working_directory": relative_working_directory(repository_path, command_cwd),
             "status": "FAILED",
             "exit_code": None,
             "stdout": limit_output(exc.stdout or ""),
@@ -537,10 +542,76 @@ def normalize_test_commands(value: Any) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             command_text = str(item.get("command") or "").strip()
             if command_text:
-                commands.append({str(key): val for key, val in item.items() if val is not None})
+                commands.append(
+                    normalize_test_command_for_execution(
+                        {str(key): val for key, val in item.items() if val is not None}
+                    )
+                )
         elif str(item or "").strip():
-            commands.append({"command": str(item).strip()})
+            commands.append(normalize_test_command_for_execution({"command": str(item).strip()}))
     return commands
+
+
+def normalize_test_command_for_execution(command: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(command)
+    command_text = str(normalized.get("command") or "").strip()
+    working_directory = normalized.get("working_directory") or normalized.get("workingDirectory")
+
+    # 兼容 LLM 已经生成的 `cd demo && npm test`，但不启用 shell。
+    # 这里只转换最简单的相对路径 cd 模式，复杂管道、重定向和多段命令仍由 split_command 拦截。
+    cd_match = re.fullmatch(r"\s*cd\s+(.+?)\s*&&\s*(.+?)\s*", command_text)
+    if cd_match and not working_directory:
+        directory_text = strip_simple_shell_quotes(cd_match.group(1).strip())
+        remaining_command = cd_match.group(2).strip()
+        if is_simple_relative_working_directory(directory_text) and remaining_command:
+            normalized["command"] = remaining_command
+            normalized["working_directory"] = directory_text
+            normalized["normalized_from_command"] = command_text
+            normalized.pop("workingDirectory", None)
+    elif working_directory:
+        normalized["working_directory"] = str(working_directory).strip()
+        normalized.pop("workingDirectory", None)
+
+    return normalized
+
+
+def strip_simple_shell_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def is_simple_relative_working_directory(value: str) -> bool:
+    if not value or any(token in value for token in ("&&", "||", ";", "|", ">", "<")):
+        return False
+    path = Path(value)
+    return not path.is_absolute() and all(part not in ("", "..") for part in path.parts)
+
+
+def resolve_command_working_directory(repository_path: Path, command: dict[str, Any]) -> Path:
+    working_directory = str(
+        command.get("working_directory") or command.get("workingDirectory") or "."
+    ).strip() or "."
+    if working_directory == ".":
+        return repository_path
+    if not is_simple_relative_working_directory(working_directory):
+        raise ValueError("working_directory must be a safe relative path")
+
+    resolved_root = repository_path.resolve()
+    resolved_cwd = (resolved_root / working_directory).resolve()
+    if resolved_cwd != resolved_root and resolved_root not in resolved_cwd.parents:
+        raise ValueError("working_directory must stay inside repository root")
+    if not resolved_cwd.exists() or not resolved_cwd.is_dir():
+        raise ValueError(f"working_directory does not exist: {working_directory}")
+    return resolved_cwd
+
+
+def relative_working_directory(repository_path: Path, command_cwd: Path) -> str:
+    try:
+        relative = command_cwd.resolve().relative_to(repository_path.resolve())
+    except ValueError:
+        return str(command_cwd)
+    return "." if str(relative) == "." else str(relative).replace("\\", "/")
 
 
 def split_command(command_text: str) -> list[str]:
