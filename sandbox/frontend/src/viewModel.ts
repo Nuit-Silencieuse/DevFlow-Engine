@@ -26,6 +26,7 @@ export const DEFAULT_STAGE_NAMES = [
   "CODE_GENERATION",
   "TEST_GENERATION",
   "APPLY_AND_RUN_TESTS",
+  "CODE_REVIEW",
 ];
 
 export interface PipelineFormValues {

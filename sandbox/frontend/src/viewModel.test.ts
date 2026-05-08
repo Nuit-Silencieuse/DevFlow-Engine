@@ -33,6 +33,7 @@ function testBuildCreateRequestOmitsEmptyRepository(): void {
     "CODE_GENERATION",
     "TEST_GENERATION",
     "APPLY_AND_RUN_TESTS",
+    "CODE_REVIEW",
   ]);
   assert.equal("repository" in request, false);
 }

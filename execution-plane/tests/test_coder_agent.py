@@ -177,6 +177,44 @@ class CoderAgentTest(unittest.TestCase):
         self.assertIn("diff_patch must not contain bash blocks", serialized_messages)
         self.assertIn("node test/plugin.test.mjs", serialized_messages)
 
+    def test_code_review_reject_adds_revision_context_to_prompt(self):
+        from src.agents.coder_agent import CoderAgent
+
+        provider = RecordingCoderProvider(
+            {
+                "summary": "æ ¹æ®ä»£ç è¯„å®¡åé¦ˆç”Ÿæˆå¢žé‡ä¿®æ­£ diff",
+                "diff_patch": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+                "changed_files": [{"path": "a.py", "operation": "update", "summary": "ä¿®æ­£è¾¹ç•Œæƒ…å†µ"}],
+                "risks": [],
+                "open_questions": [],
+            }
+        )
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=0),
+            providers={"fake": provider},
+        )
+        state = sample_state()
+        state.update(
+            {
+                "human_feedback": "è¯·åœ¨å·²åº”ç”¨çš„ä»£ç åŸºç¡€ä¸Šä¿®æ­£è¾¹ç•Œæƒ…å†µ",
+                "rejected_stage": "CODE_REVIEW",
+                "diff_patch": "diff --git a/old.py b/old.py\n",
+                "test_run_results": {"status": "PASSED"},
+                "review_report": {"status": "CHANGES_REQUESTED"},
+            }
+        )
+
+        CoderAgent(llm_client=client).run(state)
+
+        serialized_messages = json.dumps(provider.last_messages, ensure_ascii=False)
+        user_payload = json.loads(next(message["content"] for message in provider.last_messages if message["role"] == "user"))
+        self.assertEqual(
+            user_payload["revision_context"]["mode"],
+            "revise_applied_code_after_code_review_reject",
+        )
+        self.assertIn("previous_diff_patch", user_payload["revision_context"])
+        self.assertIn("Generate only an incremental corrective unified diff", serialized_messages)
+
     def test_repairs_shell_command_diff_with_second_llm_call(self):
         from src.agents.coder_agent import CoderAgent
 

@@ -15,7 +15,8 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
         "SYSTEM_DESIGN",
         "CODE_GENERATION",
         "TEST_GENERATION",
-        "APPLY_AND_RUN_TESTS"
+        "APPLY_AND_RUN_TESTS",
+        "CODE_REVIEW"
     );
 
     private final DevFlowActivities activities;
@@ -53,11 +54,14 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
 
         List<String> stages = input.stages() == null || input.stages().isEmpty() ? DEFAULT_STAGES : input.stages();
         Map<String, Object> previousOutput = Map.of();
+        Map<String, Object> accumulatedOutput = new LinkedHashMap<>();
         updateStatus("RUNNING", stages.get(0));
 
-        for (String stageName : stages) {
+        for (int stageIndex = 0; stageIndex < stages.size(); stageIndex++) {
+            String stageName = stages.get(stageIndex);
             StageExecutionResult result = executeStage(stageName, globalContext, previousOutput);
             previousOutput = result.outputPayload();
+            accumulatedOutput.putAll(result.outputPayload());
 
             if (requiresHumanApproval(stageName)) {
                 CheckpointSignal decision = waitForHumanDecision(stageName);
@@ -69,10 +73,17 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
                     ));
                     globalContext.put("human_feedback", safeFeedback(decision.feedbackReason()));
                     globalContext.put("rejected_stage", stageName);
-                    updateStatus("RUNNING", stageName);
+
+                    if ("CODE_REVIEW".equals(stageName)) {
+                        stageIndex = rollbackToCodeGeneration(stages);
+                        previousOutput = Map.copyOf(accumulatedOutput);
+                        updateStatus("RUNNING", "CODE_GENERATION");
+                        break;
+                    }
 
                     result = executeStage(stageName, globalContext, previousOutput);
                     previousOutput = result.outputPayload();
+                    accumulatedOutput.putAll(result.outputPayload());
                     decision = waitForHumanDecision(stageName);
                 }
             }
@@ -156,7 +167,16 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
     private static boolean requiresHumanApproval(String stageName) {
         return "SYSTEM_DESIGN".equals(stageName)
             || "CODE_GENERATION".equals(stageName)
-            || "TEST_GENERATION".equals(stageName);
+            || "TEST_GENERATION".equals(stageName)
+            || "CODE_REVIEW".equals(stageName);
+    }
+
+    private static int rollbackToCodeGeneration(List<String> stages) {
+        int codeGenerationIndex = stages.indexOf("CODE_GENERATION");
+        if (codeGenerationIndex < 0) {
+            throw new IllegalStateException("CODE_REVIEW reject requires CODE_GENERATION stage in workflow");
+        }
+        return codeGenerationIndex - 1;
     }
 
     private void updateStatus(String statusName, String currentStage) {

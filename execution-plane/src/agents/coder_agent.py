@@ -27,6 +27,10 @@ class CoderAgentState(TypedDict, total=False):
     code_context: dict[str, Any]
     pipeline_context: dict[str, Any]
     feedback_text: str
+    rejected_stage: str
+    previous_diff_patch: str
+    test_run_results: dict[str, Any]
+    review_report: dict[str, Any]
     response_language: str
     code_plan: dict[str, Any]
     draft_patch: dict[str, Any]
@@ -67,6 +71,10 @@ class CoderAgent:
         code_context = dict(devflow_state.get("code_context") or {})
         pipeline_context = normalize_pipeline_context(devflow_state.get("pipeline_context"))
         feedback_text = normalize_text(devflow_state.get("human_feedback", ""))
+        rejected_stage = normalize_text(devflow_state.get("rejected_stage", ""))
+        previous_diff_patch = str(devflow_state.get("diff_patch") or "")
+        test_run_results = dict(devflow_state.get("test_run_results") or {})
+        review_report = dict(devflow_state.get("review_report") or {})
         response_language = infer_response_language(
             " ".join(
                 [
@@ -100,6 +108,10 @@ class CoderAgent:
             "code_context": code_context,
             "pipeline_context": pipeline_context,
             "feedback_text": feedback_text,
+            "rejected_stage": rejected_stage,
+            "previous_diff_patch": previous_diff_patch,
+            "test_run_results": test_run_results,
+            "review_report": review_report,
             "response_language": response_language,
             "errors": errors,
         }
@@ -118,6 +130,8 @@ class CoderAgent:
                 if item.get("path")
             ],
             "inspected_files": list(code_context.get("inspected_files", [])),
+            "revision_mode": bool(state.get("feedback_text"))
+            and state.get("rejected_stage") == "CODE_REVIEW",
             "constraints": [
                 "只生成 unified diff 文本",
                 "不能写入文件",
@@ -315,6 +329,17 @@ def build_coder_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
         "design_doc": state.get("design_doc", {}),
         "code_context_summary": summarize_code_context(state.get("code_context") or {}),
         "human_feedback": state.get("feedback_text", ""),
+        "revision_context": {
+            "rejected_stage": state.get("rejected_stage", ""),
+            "previous_diff_patch": truncate_text(state.get("previous_diff_patch", ""), 12000),
+            "test_run_results": state.get("test_run_results", {}),
+            "review_report": state.get("review_report", {}),
+            "mode": (
+                "revise_applied_code_after_code_review_reject"
+                if state.get("rejected_stage") == "CODE_REVIEW" and state.get("feedback_text")
+                else "initial_or_same_stage_generation"
+            ),
+        },
         "code_plan": state.get("code_plan", {}),
         "response_language": state.get("response_language", "same_as_requirement"),
     }
@@ -343,6 +368,16 @@ def build_coder_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
                 "Commands such as `node test/plugin.test.mjs`, `npm test`, "
                 "`python -m unittest`, and `mvn test` belong to test command artifacts, "
                 "never to CODE_GENERATION diff_patch."
+            ),
+        ),
+        LlmMessage(
+            role="system",
+            content=(
+                "If revision_context.mode is revise_applied_code_after_code_review_reject, "
+                "treat the previous CODE_GENERATION diff as already applied to the repository. "
+                "Generate only an incremental corrective unified diff based on human_feedback, "
+                "review_report, and test_run_results. Do not re-output the old patch unless the "
+                "feedback explicitly asks to revert or replace that exact code."
             ),
         ),
         LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
@@ -724,6 +759,11 @@ def normalize_json_value(value: Any) -> Any:
 
 def normalize_text(value: Any) -> str:
     return " ".join(str(value or "").split())
+
+
+def truncate_text(value: Any, limit: int) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "... [truncated]"
 
 
 def infer_response_language(text: str) -> str:

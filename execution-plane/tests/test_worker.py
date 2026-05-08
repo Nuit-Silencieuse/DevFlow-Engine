@@ -226,6 +226,8 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
                                 "test_diff_patch": "diff --git a/tests/test_a.py b/tests/test_a.py\n",
                                 "test_commands": [{"command": "python -m unittest discover -s tests"}],
                             },
+                            "diff_patch": "diff --git a/a.py b/a.py\n",
+                            "code_generation_report": {"source": "coder_agent"},
                             "pipeline_context": {
                                 "version": 1,
                                 "code_contexts": [],
@@ -237,6 +239,8 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
             )
 
         self.assertEqual(result["stageName"], "APPLY_AND_RUN_TESTS")
+        self.assertIn("diff --git", result["outputPayload"]["diff_patch"])
+        self.assertEqual(result["outputPayload"]["code_generation_report"]["source"], "coder_agent")
         self.assertEqual(result["outputPayload"]["test_run_results"]["status"], "PASSED")
         self.assertEqual(result["outputPayload"]["test_run_results"]["source"], "apply_and_run_tests_agent")
 

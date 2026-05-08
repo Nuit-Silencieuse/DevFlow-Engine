@@ -92,6 +92,60 @@ class DevFlowWorkflowImplTest {
         assertThat(result.status()).isEqualTo("COMPLETED");
     }
 
+    @Test
+    void rejectedCodeReviewRollsBackToCodeGenerationWithFeedbackAndExistingOutputs() {
+        FakeActivities activities = new FakeActivities();
+        DevFlowWorkflowImpl workflow = new TestableWorkflow(
+            activities,
+            List.of(
+                new CheckpointSignal(UUID.randomUUID(), "SYSTEM_DESIGN", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_GENERATION", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "TEST_GENERATION", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_REVIEW", CheckpointDecision.REJECT, "è¯·åœ¨å·²åº”ç”¨çš„ä»£ç åŸºç¡€ä¸Šä¿®æ­£è¾¹ç•Œæƒ…å†µ"),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_GENERATION", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "TEST_GENERATION", CheckpointDecision.APPROVE, null),
+                new CheckpointSignal(UUID.randomUUID(), "CODE_REVIEW", CheckpointDecision.APPROVE, null)
+            )
+        );
+
+        DevFlowWorkflowResult result = workflow.start(new DevFlowWorkflowInput(
+            UUID.fromString("00000000-0000-0000-0000-000000000001"),
+            "Add auth",
+            "ç€¹ç‚µå¹‡é§è¯²ç¶å¨‰ã„¥å”½",
+            List.of(
+                "REQUIREMENT_ANALYSIS",
+                "SYSTEM_DESIGN",
+                "CODE_GENERATION",
+                "TEST_GENERATION",
+                "APPLY_AND_RUN_TESTS",
+                "CODE_REVIEW"
+            ),
+            new LinkedHashMap<>()
+        ));
+
+        assertThat(activities.calls).containsExactly(
+            "REQUIREMENT_ANALYSIS",
+            "SYSTEM_DESIGN",
+            "CODE_GENERATION",
+            "TEST_GENERATION",
+            "APPLY_AND_RUN_TESTS",
+            "CODE_REVIEW",
+            "CODE_GENERATION",
+            "TEST_GENERATION",
+            "APPLY_AND_RUN_TESTS",
+            "CODE_REVIEW"
+        );
+        StageExecutionRequest secondCodeGenerationRequest = activities.requests.get(6);
+        assertThat(secondCodeGenerationRequest.globalContext())
+            .containsEntry("human_feedback", "è¯·åœ¨å·²åº”ç”¨çš„ä»£ç åŸºç¡€ä¸Šä¿®æ­£è¾¹ç•Œæƒ…å†µ")
+            .containsEntry("rejected_stage", "CODE_REVIEW");
+        assertThat(secondCodeGenerationRequest.previousOutput())
+            .containsKey("diff_patch")
+            .containsKey("test_run_results")
+            .containsKey("review_report");
+        assertThat(result.currentStage()).isEqualTo("CODE_REVIEW");
+    }
+
     private static DevFlowWorkflowInput input() {
         return new DevFlowWorkflowInput(
             UUID.fromString("00000000-0000-0000-0000-000000000001"),
@@ -160,7 +214,38 @@ class DevFlowWorkflowImplTest {
         private StageExecutionResult execute(String stageName, StageExecutionRequest request) {
             calls.add(stageName);
             requests.add(request);
-            return new StageExecutionResult(stageName, "COMPLETED", Map.of("stage", stageName));
+            return new StageExecutionResult(stageName, "COMPLETED", outputFor(stageName));
+        }
+
+        private Map<String, Object> outputFor(String stageName) {
+            return switch (stageName) {
+                case "REQUIREMENT_ANALYSIS" -> Map.of(
+                    "structured_prd", Map.of("summary", "prd"),
+                    "stage", stageName
+                );
+                case "SYSTEM_DESIGN" -> Map.of(
+                    "design_doc", Map.of("summary", "design"),
+                    "stage", stageName
+                );
+                case "CODE_GENERATION" -> Map.of(
+                    "diff_patch", "diff --git a/a b/a",
+                    "code_generation_report", Map.of("summary", "code"),
+                    "stage", stageName
+                );
+                case "TEST_GENERATION" -> Map.of(
+                    "test_results", Map.of("summary", "tests"),
+                    "stage", stageName
+                );
+                case "APPLY_AND_RUN_TESTS" -> Map.of(
+                    "test_run_results", Map.of("status", "PASSED"),
+                    "stage", stageName
+                );
+                case "CODE_REVIEW" -> Map.of(
+                    "review_report", Map.of("status", "CHANGES_REQUESTED"),
+                    "stage", stageName
+                );
+                default -> Map.of("stage", stageName);
+            };
         }
     }
 }
