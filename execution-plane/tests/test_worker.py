@@ -10,6 +10,7 @@ from src.workers.activities import (
     apply_and_run_tests,
     registered_activities,
     _state_from_request,
+    _output_payload_for_stage,
     concise_activity_error,
 )
 from src.workers.worker import TASK_QUEUE
@@ -156,7 +157,7 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertEqual(result["stageName"], "SYSTEM_DESIGN")
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["outputPayload"]["design_doc"]["source"], "design_agent")
-        self.assertIn("pipeline_context", result["outputPayload"])
+        self.assertNotIn("pipeline_context", result["outputPayload"])
 
     def test_code_generation_activity_returns_diff_patch_for_console_display(self):
         with patch("src.graph.flow.CoderAgent", StubCoderAgent):
@@ -182,7 +183,7 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertEqual(result["stageName"], "CODE_GENERATION")
         self.assertIn("diff --git", result["outputPayload"]["diff_patch"])
         self.assertEqual(result["outputPayload"]["code_generation_report"]["source"], "coder_agent")
-        self.assertIn("pipeline_context", result["outputPayload"])
+        self.assertNotIn("pipeline_context", result["outputPayload"])
 
     def test_test_generation_activity_returns_test_results_for_console_display(self):
         with patch("src.graph.flow.TestAgent", StubTestAgent):
@@ -209,7 +210,7 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertIn("test_results", result["outputPayload"])
         self.assertIn("diff --git", result["outputPayload"]["test_results"]["test_diff_patch"])
         self.assertEqual(result["outputPayload"]["test_results"]["source"], "test_agent")
-        self.assertIn("pipeline_context", result["outputPayload"])
+        self.assertNotIn("pipeline_context", result["outputPayload"])
 
     def test_apply_and_run_tests_activity_returns_test_run_result(self):
         with patch("src.graph.flow.ApplyAndRunTestsAgent", StubApplyAndRunTestsAgent):
@@ -285,6 +286,41 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
             state["pipeline_context"]["code_contexts"][0]["inspected_files"],
             ["src/App.tsx"],
         )
+
+    def test_output_payload_omits_pipeline_context_and_slims_large_code_context(self):
+        payload = _output_payload_for_stage(
+            "REQUIREMENT_ANALYSIS",
+            {
+                "current_step": "REQUIREMENT_ANALYSIS",
+                "structured_prd": {"summary": "demo"},
+                "pipeline_context": {
+                    "artifact_index": {
+                        "CODE_GENERATION": {"diff_patch": "x" * 10000},
+                    }
+                },
+                "code_context": {
+                    "root_path": "D:/repo",
+                    "files": [{"path": "src/a.py", "content": "x" * 10000}],
+                    "repository_map": {
+                        "files": [{"path": f"src/{index}.py"} for index in range(200)],
+                        "directorySummaries": [{"path": "src"}],
+                        "highSignalFiles": ["src/a.py"],
+                        "entrypointFiles": ["src/main.py"],
+                    },
+                    "candidate_files": [f"src/{index}.py" for index in range(200)],
+                    "evidence": [{"file_path": "src/a.py", "excerpt": "x" * 2000}],
+                    "exploration_trace": [{"actionType": "READ_FILE", "input": {"content": "x" * 5000}}],
+                },
+            },
+        )
+
+        code_context = payload["code_context"]
+        self.assertNotIn("pipeline_context", payload)
+        self.assertNotIn("files", code_context)
+        self.assertNotIn("repository_map", code_context)
+        self.assertEqual(code_context["repository_map_summary"]["file_count"], 200)
+        self.assertLessEqual(len(code_context["candidate_files"]), 80)
+        self.assertLessEqual(len(code_context["evidence"][0]["excerpt"]), 820)
 
     def test_concise_activity_error_explains_llm_timeout_without_large_payload(self):
         error = concise_activity_error("SYSTEM_DESIGN", TimeoutError("LLM provider request timed out"))

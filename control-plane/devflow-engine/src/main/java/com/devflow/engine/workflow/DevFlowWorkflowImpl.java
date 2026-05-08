@@ -83,8 +83,7 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
         return new DevFlowWorkflowResult(
             input.pipelineId(),
             "COMPLETED",
-            currentStage,
-            List.copyOf(stageResults)
+            currentStage
         );
     }
 

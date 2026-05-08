@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from temporalio import activity
@@ -150,20 +151,92 @@ def _output_payload_for_stage(stage_name: str, state: DevFlowState) -> dict[str,
             "structured_prd",
             "code_context",
             "codeContext",
-            "pipeline_context",
             "exploration_trace",
             "explorationTrace",
         ),
-        SYSTEM_DESIGN: ("structured_prd", "design_doc", "human_feedback", "pipeline_context"),
-        CODE_GENERATION: ("design_doc", "diff_patch", "code_generation_report", "pipeline_context"),
-        TEST_GENERATION: ("diff_patch", "test_results", "pipeline_context"),
-        APPLY_AND_RUN_TESTS: ("test_results", "test_run_results", "pipeline_context"),
-        CODE_REVIEW: ("test_results", "review_report", "pipeline_context"),
-        DELIVERY_INTEGRATION: ("review_report", "delivery_status", "pipeline_context"),
+        SYSTEM_DESIGN: ("structured_prd", "design_doc", "human_feedback", "code_context"),
+        CODE_GENERATION: ("design_doc", "diff_patch", "code_generation_report", "code_context"),
+        TEST_GENERATION: ("diff_patch", "test_results", "code_context"),
+        APPLY_AND_RUN_TESTS: ("test_results", "test_run_results", "code_context"),
+        CODE_REVIEW: ("test_results", "test_run_results", "review_report", "code_context"),
+        DELIVERY_INTEGRATION: ("review_report", "delivery_status", "code_context"),
     }[stage_name]
 
     output: dict[str, Any] = {"current_step": state.get("current_step", stage_name)}
     for key in output_keys:
         if key in state:
-            output[key] = state[key]  # type: ignore[literal-required]
+            output[key] = slim_output_value(key, state[key])  # type: ignore[literal-required]
     return output
+
+
+def slim_output_value(key: str, value: Any) -> Any:
+    if key in ("code_context", "codeContext"):
+        return slim_code_context(value)
+    if key in ("exploration_trace", "explorationTrace"):
+        return slim_exploration_trace(value)
+    return value
+
+
+def slim_code_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    context = deepcopy(value)
+    context.pop("files", None)
+    context["candidate_files"] = list(context.get("candidate_files") or [])[:80]
+    context["inspected_files"] = list(context.get("inspected_files") or [])
+    context["search_queries"] = list(context.get("search_queries") or [])[:40]
+    context["skipped_paths"] = list(context.get("skipped_paths") or [])[:40]
+    context["evidence"] = [slim_evidence_item(item) for item in list(context.get("evidence") or [])[:24]]
+    context["exploration_trace"] = slim_exploration_trace(context.get("exploration_trace"))
+    context["repository_map_summary"] = repository_map_summary(context.get("repository_map"))
+    context.pop("repository_map", None)
+    return context
+
+
+def slim_evidence_item(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    item = dict(value)
+    if "excerpt" in item:
+        item["excerpt"] = truncate_text(item.get("excerpt"), 800)
+    return item
+
+
+def slim_exploration_trace(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    slimmed = []
+    for step in value[:40]:
+        if not isinstance(step, dict):
+            slimmed.append(step)
+            continue
+        slimmed.append(
+            {
+                "stepIndex": step.get("stepIndex") or step.get("step_index"),
+                "roundIndex": step.get("roundIndex") or step.get("round_index"),
+                "actionType": step.get("actionType") or step.get("action_type"),
+                "resultSummary": truncate_text(step.get("resultSummary") or step.get("result_summary"), 500),
+                "selectedFiles": list(step.get("selectedFiles") or step.get("selected_files") or [])[:20],
+            }
+        )
+    return slimmed
+
+
+def repository_map_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    files = value.get("files")
+    directories = value.get("directorySummaries") or value.get("directory_summaries")
+    high_signal = value.get("highSignalFiles") or value.get("high_signal_files")
+    entrypoints = value.get("entrypointFiles") or value.get("entrypoint_files")
+    return {
+        "file_count": len(files) if isinstance(files, list) else 0,
+        "directory_count": len(directories) if isinstance(directories, list) else 0,
+        "high_signal_files": list(high_signal or [])[:40],
+        "entrypoint_files": list(entrypoints or [])[:40],
+    }
+
+
+def truncate_text(value: Any, limit: int) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "... [truncated]"
