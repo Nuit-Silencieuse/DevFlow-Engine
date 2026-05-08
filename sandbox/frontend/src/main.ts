@@ -21,7 +21,7 @@ import {
   stageLabel,
   statusTone,
 } from "./viewModel";
-import type { CodeDiffFile } from "./viewModel";
+import type { AgentTraceEventViewModel, AgentTraceViewModel, CodeDiffFile } from "./viewModel";
 
 interface AppState {
   pipeline: PipelineStatusResponse | null;
@@ -555,6 +555,9 @@ function renderStageArtifact(stage: StageStatusResponse | null): void {
   if (isTestResultArtifact) {
     artifactOutput.append(renderDiffFiles(parseUnifiedDiffForDisplay(testDiffText), "测试代码 Diff"));
   }
+  if (view.agentTrace) {
+    artifactOutput.append(renderAgentTrace(view.agentTrace));
+  }
 
   const visibleSections = isCodeDiffArtifact
     ? view.sections.filter((section) => !section.title.includes("Diff"))
@@ -670,6 +673,91 @@ function renderDiffFiles(files: CodeDiffFile[], title = "Diff 文件"): HTMLElem
     section.append(fileBlock);
   }
   return section;
+}
+
+function renderAgentTrace(trace: AgentTraceViewModel): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "artifact-section agent-trace-section";
+  section.append(sectionTitle("运行诊断"));
+
+  if (trace.traceFile) {
+    const file = document.createElement("div");
+    file.className = "agent-trace-file";
+    const label = document.createElement("span");
+    label.textContent = "Trace 文件";
+    const value = document.createElement("code");
+    value.textContent = trace.traceFile;
+    file.append(label, value);
+    section.append(file);
+  }
+
+  const details = document.createElement("details");
+  details.className = "agent-trace-events";
+  const summary = document.createElement("summary");
+  summary.textContent = `最近事件 (${trace.recentEvents.length})`;
+  details.append(summary);
+
+  if (trace.recentEvents.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-text";
+    empty.textContent = "暂无最近事件。";
+    details.append(empty);
+  } else {
+    for (const event of trace.recentEvents) {
+      details.append(renderAgentTraceEvent(event));
+    }
+  }
+
+  section.append(details);
+  return section;
+}
+
+function renderAgentTraceEvent(event: AgentTraceEventViewModel): HTMLElement {
+  const row = document.createElement("article");
+  row.className = "agent-trace-event";
+
+  const heading = document.createElement("div");
+  heading.className = "agent-trace-event-heading";
+  const type = document.createElement("strong");
+  type.textContent = event.type || "event";
+  const time = document.createElement("time");
+  time.textContent = formatTraceTime(event.timestamp);
+  heading.append(type, time);
+
+  const summary = document.createElement("p");
+  summary.className = "agent-trace-event-summary";
+  summary.textContent = summarizeTracePayload(event.payload);
+
+  const payloadDetails = document.createElement("details");
+  payloadDetails.className = "agent-trace-payload";
+  const payloadSummary = document.createElement("summary");
+  payloadSummary.textContent = "查看事件字段";
+  const payload = document.createElement("pre");
+  payload.textContent = formatJson(event.payload);
+  payloadDetails.append(payloadSummary, payload);
+
+  row.append(heading, summary, payloadDetails);
+  return row;
+}
+
+function summarizeTracePayload(payload: Record<string, unknown>): string {
+  const parts = [
+    payload.stage,
+    payload.agent,
+    payload.node ? `node=${payload.node}` : "",
+    payload.task ? `task=${payload.task}` : "",
+    payload.durationMs !== undefined ? `${payload.durationMs}ms` : "",
+    payload.promptChars !== undefined ? `prompt=${payload.promptChars} chars` : "",
+    payload.errorType ? `error=${payload.errorType}` : "",
+  ]
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "无摘要字段";
+}
+
+function formatTraceTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function readTestDiffPatch(raw: unknown): string | null {

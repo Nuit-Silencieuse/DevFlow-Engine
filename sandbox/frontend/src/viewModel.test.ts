@@ -231,6 +231,41 @@ function testBuildCodeGenerationArtifactShowsLlmDiagnostics(): void {
   assert.equal(JSON.stringify(view).includes("diff_patch is not a unified diff"), true);
 }
 
+function testBuildCodeGenerationArtifactUsesDedicatedAgentTraceView(): void {
+  const view = buildStageArtifactViewModel({
+    name: "CODE_GENERATION",
+    status: "COMPLETED",
+    requiresHumanApproval: true,
+    output: {
+      diff_patch: "",
+      code_generation_report: {
+        summary: "代码生成耗时较长",
+        agent_trace: {
+          enabled: true,
+          trace_file: "execution-plane/logs/agent-trace-p1.jsonl",
+          recent_events: [
+            {
+              timestamp: "2026-05-08T00:00:00Z",
+              type: "agent.llm.start",
+              payload: {
+                stage: "CODE_GENERATION",
+                agent: "CoderAgent",
+                node: "draft_code_patch",
+                promptChars: 12000,
+              },
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.equal(view?.agentTrace?.traceFile, "execution-plane/logs/agent-trace-p1.jsonl");
+  assert.equal(view?.agentTrace?.recentEvents[0].type, "agent.llm.start");
+  assert.equal(view?.sections.some((section) => section.title === "运行诊断"), false);
+  assert.equal(JSON.stringify(view).includes("enabled"), false);
+}
+
 function testParseUnifiedDiffForDisplayKeepsFullDiff(): void {
   const longBody = Array.from({ length: 30 }, (_, index) => `+line_${index + 1}`).join("\n");
   const files = parseUnifiedDiffForDisplay(
@@ -385,6 +420,7 @@ function main(): void {
   testBuildDesignArtifactShowsOnlyDesignDoc();
   testBuildCodeGenerationArtifactShowsDiffByFile();
   testBuildCodeGenerationArtifactShowsLlmDiagnostics();
+  testBuildCodeGenerationArtifactUsesDedicatedAgentTraceView();
   testParseUnifiedDiffForDisplayKeepsFullDiff();
   testBuildTestGenerationArtifactShowsCodeAndExecutionResults();
   testBuildApplyAndRunTestsArtifactShowsManualAction();

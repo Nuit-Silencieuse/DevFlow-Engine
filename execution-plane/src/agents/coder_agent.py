@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from src.llm import LlmClient, LlmMessage, LlmRequest
+from src.observability import AgentTraceRecorder
 from src.pipeline_context import append_stage_code_context, normalize_pipeline_context
 
 if TYPE_CHECKING:
@@ -39,6 +41,7 @@ class CoderAgentState(TypedDict, total=False):
     attempts: int
     errors: list[str]
     result: DevFlowState
+    agent_trace: dict[str, Any]
 
 
 class CoderAgent:
@@ -52,19 +55,56 @@ class CoderAgent:
     def __init__(self, llm_client: LlmClient | None = None, max_repair_attempts: int = 1):
         self.llm_client = llm_client or LlmClient.from_sources()
         self.max_repair_attempts = max_repair_attempts
+        self.agent_trace = AgentTraceRecorder.disabled()
         self.graph = build_coder_agent_graph(self)
 
     def run(self, state: DevFlowState) -> DevFlowState:
-        result = self.graph.invoke(
+        self.agent_trace = AgentTraceRecorder.from_sources(
+            pipeline_id=str(state.get("pipeline_id") or state.get("pipelineId") or "unknown")
+        )
+        self.agent_trace.record(
+            "agent.start",
             {
-                "devflow_state": state,
-                "attempts": 0,
-                "errors": list(state.get("error_logs", [])),
-            }
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "pipelineId": state.get("pipeline_id") or state.get("pipelineId"),
+                "inputSummary": summarize_state_for_trace(state),
+            },
+        )
+        started_at = time.monotonic()
+        try:
+            result = self.graph.invoke(
+                {
+                    "devflow_state": state,
+                    "attempts": 0,
+                    "errors": list(state.get("error_logs", [])),
+                }
+            )
+        except Exception as exc:
+            self.agent_trace.record(
+                "agent.error",
+                {
+                    "stage": CODE_GENERATION,
+                    "agent": "CoderAgent",
+                    "durationMs": elapsed_ms(started_at),
+                    "errorType": type(exc).__name__,
+                    "errorMessage": str(exc),
+                },
+            )
+            raise
+        self.agent_trace.record(
+            "agent.end",
+            {
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "durationMs": elapsed_ms(started_at),
+                "outputSummary": summarize_state_for_trace(result.get("result") or {}),
+            },
         )
         return result["result"]
 
     def prepare_input(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("prepare_input", summarize_state_for_trace(state.get("devflow_state") or {}))
         devflow_state = state["devflow_state"]
         structured_prd = dict(devflow_state.get("structured_prd") or {})
         design_doc = dict(devflow_state.get("design_doc") or {})
@@ -102,7 +142,7 @@ class CoderAgent:
                 len(feedback_text),
             )
 
-        return {
+        result = {
             "structured_prd": structured_prd,
             "design_doc": design_doc,
             "code_context": code_context,
@@ -115,8 +155,11 @@ class CoderAgent:
             "response_language": response_language,
             "errors": errors,
         }
+        self.record_node_end("prepare_input", started_at, summarize_coder_state(result))
+        return result
 
     def plan_code(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("plan_code", summarize_coder_state(state))
         design_doc = state.get("design_doc") or {}
         code_context = state.get("code_context") or {}
         file_plan = normalize_named_items(design_doc.get("file_plan"))
@@ -143,9 +186,12 @@ class CoderAgent:
             "coder_agent.code_plan",
             {"code_plan": code_plan},
         )
-        return {"code_plan": code_plan}
+        result = {"code_plan": code_plan}
+        self.record_node_end("plan_code", started_at, summarize_coder_state({**state, **result}))
+        return result
 
     def draft_code_patch(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("draft_code_patch", summarize_coder_state(state))
         logger.warning(
             "CoderAgent is calling LLM for diff generation. file_plan_items=%s inspected_files=%s feedback_present=%s",
             len((state.get("code_plan") or {}).get("file_plan", [])),
@@ -158,14 +204,23 @@ class CoderAgent:
             json_schema=CODER_PATCH_SCHEMA,
             metadata={"stage": CODE_GENERATION},
         )
-        draft = self.llm_client.complete_json(request)
+        llm_started_at = self.record_llm_start("draft_code_patch", request)
+        try:
+            draft = self.llm_client.complete_json(request)
+        except Exception as exc:
+            self.record_llm_error("draft_code_patch", llm_started_at, exc)
+            raise
+        self.record_llm_end("draft_code_patch", llm_started_at, summarize_patch_payload(draft))
         self.llm_client.trace_recorder.record(
             "coder_agent.draft_patch",
             {"draft_patch": draft},
         )
-        return {"draft_patch": draft}
+        result = {"draft_patch": draft}
+        self.record_node_end("draft_code_patch", started_at, summarize_coder_state({**state, **result}))
+        return result
 
     def validate_patch(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("validate_patch", summarize_coder_state(state))
         normalized = normalize_patch_payload(state.get("draft_patch") or {})
         issues = validate_patch_payload(normalized)
         if issues:
@@ -180,12 +235,15 @@ class CoderAgent:
             "coder_agent.validation_report",
             {"validation_report": validation_report},
         )
-        return {
+        result = {
             "normalized_patch": normalized,
             "validation_report": validation_report,
         }
+        self.record_node_end("validate_patch", started_at, summarize_coder_state({**state, **result}))
+        return result
 
     def repair_patch(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("repair_patch", summarize_coder_state(state))
         # 修复范围只限格式外壳，例如去掉 Markdown fenced code block。这里不会根据
         # design_doc 自行编造 diff，因为那会绕过 LLM 生成和人工审查边界。
         logger.warning(
@@ -199,17 +257,26 @@ class CoderAgent:
             json_schema=CODER_PATCH_SCHEMA,
             metadata={"stage": CODE_GENERATION, "repair": True},
         )
-        repaired = self.llm_client.complete_json(request)
+        llm_started_at = self.record_llm_start("repair_patch", request)
+        try:
+            repaired = self.llm_client.complete_json(request)
+        except Exception as exc:
+            self.record_llm_error("repair_patch", llm_started_at, exc)
+            raise
+        self.record_llm_end("repair_patch", llm_started_at, summarize_patch_payload(repaired))
         self.llm_client.trace_recorder.record(
             "coder_agent.repaired_patch",
             {"repaired_patch": repaired},
         )
-        return {
+        result = {
             "draft_patch": repaired,
             "attempts": int(state.get("attempts", 0)) + 1,
         }
+        self.record_node_end("repair_patch", started_at, summarize_coder_state({**state, **result}))
+        return result
 
     def finalize(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("finalize", summarize_coder_state(state))
         patch_payload = state.get("normalized_patch") or {}
         diff_patch = str(patch_payload.get("diff_patch") or "")
         report = build_code_generation_report(
@@ -218,6 +285,7 @@ class CoderAgent:
             code_plan=state.get("code_plan") or {},
             feedback_text=state.get("feedback_text", ""),
         )
+        report["agent_trace"] = self.agent_trace.diagnostics()
         pipeline_context = append_stage_code_context(
             normalize_pipeline_context(state.get("pipeline_context")),
             stage=CODE_GENERATION,
@@ -228,7 +296,7 @@ class CoderAgent:
                 "code_generation_report": report,
             },
         )
-        return {
+        result = {
             "result": {
                 "diff_patch": diff_patch,
                 "code_generation_report": report,
@@ -237,8 +305,11 @@ class CoderAgent:
                 "error_logs": list(state.get("errors", [])),
             }
         }
+        self.record_node_end("finalize", started_at, summarize_state_for_trace(result["result"]))
+        return result
 
     def fail_soft(self, state: CoderAgentState) -> CoderAgentState:
+        started_at = self.record_node_start("fail_soft", summarize_coder_state(state))
         errors = list(state.get("errors", []))
         validation_issues = list((state.get("validation_report") or {}).get("issues", []))
         errors = errors + validation_issues if validation_issues else errors
@@ -261,6 +332,7 @@ class CoderAgent:
             "feedback": state.get("feedback_text", ""),
             "quality": {"confidence": "LOW"},
             "llm_diagnostics": build_llm_diagnostics(state),
+            "agent_trace": self.agent_trace.diagnostics(),
             "source": "coder_agent",
         }
         pipeline_context = append_stage_code_context(
@@ -270,7 +342,7 @@ class CoderAgent:
             code_context=dict(state.get("code_context") or {}),
             artifacts={"diff_patch": "", "code_generation_report": report},
         )
-        return {
+        result = {
             "result": {
                 "diff_patch": "",
                 "code_generation_report": report,
@@ -279,6 +351,75 @@ class CoderAgent:
                 "error_logs": errors,
             }
         }
+        self.record_node_end("fail_soft", started_at, summarize_state_for_trace(result["result"]))
+        return result
+
+    def record_node_start(self, node: str, input_summary: dict[str, Any]) -> float:
+        started_at = time.monotonic()
+        self.agent_trace.record(
+            "agent.node.start",
+            {
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "node": node,
+                "inputSummary": input_summary,
+            },
+        )
+        return started_at
+
+    def record_node_end(self, node: str, started_at: float, output_summary: dict[str, Any]) -> None:
+        self.agent_trace.record(
+            "agent.node.end",
+            {
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "node": node,
+                "durationMs": elapsed_ms(started_at),
+                "outputSummary": output_summary,
+            },
+        )
+
+    def record_llm_start(self, node: str, request: LlmRequest) -> float:
+        started_at = time.monotonic()
+        self.agent_trace.record(
+            "agent.llm.start",
+            {
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "node": node,
+                "task": request.task,
+                "timeoutSeconds": request.timeout_seconds,
+                "messageCount": len(request.messages),
+                "promptChars": sum(len(message.content) for message in request.messages),
+                "schemaKeys": list((request.json_schema or {}).get("properties", {}).keys()),
+            },
+        )
+        return started_at
+
+    def record_llm_end(self, node: str, started_at: float, response_summary: dict[str, Any]) -> None:
+        self.agent_trace.record(
+            "agent.llm.end",
+            {
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "node": node,
+                "durationMs": elapsed_ms(started_at),
+                "responseSummary": response_summary,
+            },
+        )
+
+    def record_llm_error(self, node: str, started_at: float, exc: Exception) -> None:
+        self.agent_trace.record(
+            "agent.llm.error",
+            {
+                "stage": CODE_GENERATION,
+                "agent": "CoderAgent",
+                "node": node,
+                "durationMs": elapsed_ms(started_at),
+                "errorType": type(exc).__name__,
+                "errorMessage": str(exc),
+            },
+        )
 
 
 def build_coder_agent_graph(agent: CoderAgent):
@@ -528,6 +669,59 @@ def build_code_generation_report(
             "file_count": len(parse_diff_file_paths(str(patch_payload.get("diff_patch") or ""))),
         },
         "source": "coder_agent",
+    }
+
+
+def elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def summarize_state_for_trace(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "hasStructuredPrd": bool(state.get("structured_prd")),
+        "hasDesignDoc": bool(state.get("design_doc")),
+        "hasDiffPatch": bool(state.get("diff_patch")),
+        "diffChars": len(str(state.get("diff_patch") or "")),
+        "hasTestRunResults": bool(state.get("test_run_results")),
+        "hasReviewReport": bool(state.get("review_report")),
+        "feedbackPresent": bool(state.get("human_feedback") or state.get("feedback_text")),
+        "rejectedStage": state.get("rejected_stage", ""),
+        "pipelineId": state.get("pipeline_id") or state.get("pipelineId"),
+    }
+
+
+def summarize_coder_state(state: dict[str, Any]) -> dict[str, Any]:
+    design_doc = state.get("design_doc") if isinstance(state.get("design_doc"), dict) else {}
+    code_context = state.get("code_context") if isinstance(state.get("code_context"), dict) else {}
+    code_plan = state.get("code_plan") if isinstance(state.get("code_plan"), dict) else {}
+    validation_report = state.get("validation_report") if isinstance(state.get("validation_report"), dict) else {}
+    return {
+        "filePlanCount": len(design_doc.get("file_plan") or code_plan.get("file_plan") or []),
+        "inspectedFiles": len(code_context.get("inspected_files") or []),
+        "feedbackPresent": bool(state.get("feedback_text")),
+        "rejectedStage": state.get("rejected_stage", ""),
+        "attempts": int(state.get("attempts", 0) or 0),
+        "revisionMode": bool((code_plan or {}).get("revision_mode")),
+        "draftPatch": summarize_patch_payload(state.get("draft_patch") or {}),
+        "normalizedPatch": summarize_patch_payload(state.get("normalized_patch") or {}),
+        "validation": {
+            "valid": validation_report.get("valid"),
+            "issueCount": len(validation_report.get("issues") or []),
+            "repairable": validation_report.get("repairable"),
+        },
+    }
+
+
+def summarize_patch_payload(value: Any) -> dict[str, Any]:
+    payload = value if isinstance(value, dict) else {}
+    diff_patch = str(payload.get("diff_patch") or payload.get("diffPatch") or "")
+    return {
+        "summaryChars": len(str(payload.get("summary") or "")),
+        "diffChars": len(diff_patch),
+        "changedFiles": len(payload.get("changed_files") or payload.get("changedFiles") or []),
+        "riskCount": len(payload.get("risks") or []),
+        "openQuestionCount": len(payload.get("open_questions") or payload.get("openQuestions") or []),
+        "looksLikeUnifiedDiff": looks_like_unified_diff(diff_patch),
     }
 
 

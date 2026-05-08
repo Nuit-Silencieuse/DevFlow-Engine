@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from typing import Any
 
 from temporalio import activity
@@ -17,6 +18,7 @@ from src.graph.flow import (
     run_stage,
 )
 from src.graph.state import DevFlowState
+from src.observability import AgentTraceRecorder
 
 StageExecutionRequest = dict[str, Any]
 StageExecutionResult = dict[str, Any]
@@ -70,20 +72,52 @@ def registered_activities():
 
 
 def _execute_stage(stage_name: str, request: StageExecutionRequest) -> StageExecutionResult:
+    trace_recorder = AgentTraceRecorder.from_sources(
+        pipeline_id=str(request.get("pipelineId") or request.get("pipeline_id") or "unknown")
+    )
     try:
+        trace_recorder.record(
+            "activity.stage.start",
+            {
+                "stage": stage_name,
+                "pipelineId": request.get("pipelineId") or request.get("pipeline_id"),
+                "previousOutputKeys": list((request.get("previousOutput") or {}).keys()),
+            },
+        )
         state = _state_from_request(request)
         result_state = run_stage(stage_name, state)
         output_payload = _output_payload_for_stage(stage_name, result_state)
+        trace_recorder.record(
+            "activity.stage.end",
+            {
+                "stage": stage_name,
+                "pipelineId": request.get("pipelineId") or request.get("pipeline_id"),
+                "outputKeys": list(output_payload.keys()),
+            },
+        )
         return {
             "stageName": stage_name,
             "status": "COMPLETED",
             "outputPayload": output_payload,
         }
     except Exception as exc:
-        raise concise_activity_error(stage_name, exc) from None
+        trace_recorder.record(
+            "activity.stage.error",
+            {
+                "stage": stage_name,
+                "pipelineId": request.get("pipelineId") or request.get("pipeline_id"),
+                "errorType": exc.__class__.__name__,
+                "message": str(exc),
+            },
+        )
+        raise concise_activity_error(
+            stage_name,
+            exc,
+            pipeline_id=str(request.get("pipelineId") or request.get("pipeline_id") or "unknown"),
+        ) from None
 
 
-def concise_activity_error(stage_name: str, exc: Exception) -> ApplicationError:
+def concise_activity_error(stage_name: str, exc: Exception, pipeline_id: str | None = None) -> ApplicationError:
     error_type = exc.__class__.__name__
     message = str(exc).strip() or error_type
     if len(message) > 1200:
@@ -94,8 +128,12 @@ def concise_activity_error(stage_name: str, exc: Exception) -> ApplicationError:
             "。这通常表示模型响应超过当前超时时间；可提高 DEVFLOW_LLM_TIMEOUT_SECONDS，"
             "或降低上下文/输出规模后重试。"
         )
+    trace_hint = ""
+    diagnostics = AgentTraceRecorder.from_sources(pipeline_id=pipeline_id).diagnostics(tail=5)
+    if diagnostics.get("recent_events"):
+        trace_hint = f" Recent agent trace: {json_compact(diagnostics, limit=600)}"
     return ApplicationError(
-        f"{stage_name} Activity failed: {error_type}: {message}{hint}",
+        f"{stage_name} Activity failed: {error_type}: {message}{hint}{trace_hint}",
         type=f"DevFlow{error_type}",
     )
 
@@ -104,6 +142,7 @@ def _state_from_request(request: StageExecutionRequest) -> DevFlowState:
     global_context = dict(request.get("globalContext") or {})
     previous_output = dict(request.get("previousOutput") or {})
     state: DevFlowState = {
+        "pipeline_id": request.get("pipelineId") or request.get("pipeline_id") or "",
         "original_requirement": request.get("requirement")
         or global_context.get("original_requirement", ""),
         "error_logs": [],
@@ -246,4 +285,9 @@ def repository_map_summary(value: Any) -> dict[str, Any]:
 
 def truncate_text(value: Any, limit: int) -> str:
     text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "... [truncated]"
+
+
+def json_compact(value: Any, limit: int = 1600) -> str:
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     return text if len(text) <= limit else text[:limit] + "... [truncated]"

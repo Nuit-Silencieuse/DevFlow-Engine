@@ -529,6 +529,21 @@ DesignAgent 在以下位置输出 warning，方便本地调试和真实 LLM 调�
 
 当前实现仍然是“生成补丁”阶段，不是“应用补丁”阶段。是否把 diff 应用到工作区、是否运行测试、是否允许提交 Git，都应交给后续沙箱执行、测试生成和人工审批流程控制。
 
+### CoderAgent 运行诊断
+
+代码生成阶段可能出现“偶尔很快、偶尔长时间等待”的现象。为避免只能从 Activity 总耗时倒推原因，执行平面增加了轻量级 `AgentTraceRecorder`。它按 JSONL 写入 `execution-plane/logs/agent-trace-{pipelineId}.jsonl`，默认记录 `agent.start`、`agent.node.start`、`agent.llm.start`、`agent.llm.end`、`agent.node.end`、`agent.error` 和 `agent.end` 等事件。
+
+这些事件只保存节点名、阶段名、耗时、消息数量、提示词字符数、schema 字段、响应摘要和异常类型，不写入完整 prompt、完整 diff 或完整仓库片段。这样可以判断当前卡在 `prepare_input`、`plan_code`、`draft_code_patch`、`validate_patch`、`repair_patch`、`finalize` 的哪一步，同时避免把大对象塞进 Temporal history。
+
+相关配置位于 `.env.local`：
+
+- `DEVFLOW_AGENT_TRACE`: 是否开启 Agent 节点 trace，默认开启。
+- `DEVFLOW_AGENT_TRACE_STDOUT`: 是否同时打印到终端，默认关闭。
+- `DEVFLOW_AGENT_TRACE_DIR`: trace 文件目录，默认 `execution-plane/logs`。
+- `DEVFLOW_AGENT_TRACE_MAX_CHARS`: 单个字符串字段最大写入长度。
+
+`CODE_GENERATION` 的 `code_generation_report.agent_trace` 会带上 trace 文件路径和最近几条事件。前端流水线控制台在代码生成产物中展示“运行诊断”，用于快速判断长耗时是否发生在 LLM 调用、格式修复循环，还是输入准备/校验阶段。
+
 ## T025 TestAgent 子图实现
 
 `execution-plane/src/agents/test_agent.py` 承载 `TEST_GENERATION` 阶段的真实业务逻辑。它消费 `diff_patch`、`design_doc`、`structured_prd`、`code_context` 和人工反馈，生成测试补丁 `test_diff_patch`、测试文件计划、测试命令和执行结果记录。当前阶段不会直接把测试补丁写入工作区，也不会在 Agent 内执行 shell 命令；如果补丁尚未应用，`execution_results.status` 必须显式为 `NOT_RUN`，避免前端和人工检查点误以为测试已经通过。

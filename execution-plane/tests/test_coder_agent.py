@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from src.llm import LlmClient, LlmClientConfig, LlmResponse
@@ -147,6 +150,61 @@ class CoderAgentTest(unittest.TestCase):
             result["pipeline_context"]["artifact_index"]["CODE_GENERATION"]["diff_patch"],
             diff_patch,
         )
+
+    def test_records_agent_trace_for_code_generation_nodes(self):
+        from src.agents.coder_agent import CoderAgent
+
+        diff_patch = (
+            "diff --git a/a.py b/a.py\n"
+            "--- a/a.py\n"
+            "+++ b/a.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        state = sample_state()
+        state["pipeline_id"] = "pipeline-trace-test"
+
+        trace_dir = Path(__file__).resolve().parents[1] / ".test-tmp-trace"
+        shutil.rmtree(trace_dir, ignore_errors=True)
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            env_context = patch.dict(
+                os.environ,
+                {
+                    "DEVFLOW_AGENT_TRACE": "1",
+                    "DEVFLOW_AGENT_TRACE_DIR": str(trace_dir),
+                    "DEVFLOW_AGENT_TRACE_STDOUT": "0",
+                },
+                clear=False,
+            )
+            with env_context:
+                result = CoderAgent(
+                    llm_client=coder_llm_client(
+                        {
+                            "summary": "trace diff",
+                            "diff_patch": diff_patch,
+                            "changed_files": [{"path": "a.py", "operation": "update", "summary": "update"}],
+                            "risks": [],
+                            "open_questions": [],
+                        }
+                    )
+                ).run(state)
+
+                trace_info = result["code_generation_report"]["agent_trace"]
+                self.assertTrue(trace_info["enabled"])
+                self.assertTrue(os.path.exists(trace_info["trace_file"]))
+
+                with open(trace_info["trace_file"], encoding="utf-8") as file:
+                    event_types = [json.loads(line)["type"] for line in file if line.strip()]
+        finally:
+            shutil.rmtree(trace_dir, ignore_errors=True)
+
+        self.assertIn("agent.node.start", event_types)
+        self.assertIn("agent.llm.start", event_types)
+        self.assertIn("agent.llm.end", event_types)
+        self.assertIn("agent.node.end", event_types)
+        self.assertIn("agent.end", event_types)
 
     def test_prompt_preserves_language_and_forbids_file_writes(self):
         from src.agents.coder_agent import CoderAgent

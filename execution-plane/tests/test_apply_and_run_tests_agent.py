@@ -301,6 +301,66 @@ class ApplyAndRunTestsAgentTest(unittest.TestCase):
         finally:
             cleanup_workspace(root)
 
+    def test_reapplying_new_file_patch_is_idempotent_when_content_matches(self):
+        from src.agents.apply_and_run_tests_agent import apply_patch_text
+
+        root = make_workspace()
+        try:
+            patch_text = (
+                "diff --git a/demo/index.html b/demo/index.html\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/demo/index.html\n"
+                "@@ -0,0 +1,2 @@\n"
+                "+<!DOCTYPE html>\n"
+                "+<title>DevFlow Demo</title>\n"
+                "diff --git a/demo/plugin.js b/demo/plugin.js\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/demo/plugin.js\n"
+                "@@ -0,0 +1,1 @@\n"
+                "+export default {};\n"
+            )
+
+            first = apply_patch_text(root, "code_diff", patch_text)
+            second = apply_patch_text(root, "code_diff", patch_text)
+
+            self.assertEqual(first["status"], "APPLIED")
+            self.assertEqual(second["status"], "ALREADY_APPLIED")
+            self.assertTrue(second["idempotent"])
+            self.assertEqual(
+                sorted(second["already_applied_files"]),
+                ["demo/index.html", "demo/plugin.js"],
+            )
+            self.assertIn("already exists in working directory", second["stderr"])
+        finally:
+            cleanup_workspace(root)
+
+    def test_reapplying_new_file_patch_fails_when_existing_content_differs(self):
+        from src.agents.apply_and_run_tests_agent import apply_patch_text
+
+        root = make_workspace()
+        try:
+            demo = root / "demo"
+            demo.mkdir()
+            (demo / "index.html").write_text("different\n", encoding="utf-8")
+            patch_text = (
+                "diff --git a/demo/index.html b/demo/index.html\n"
+                "new file mode 100644\n"
+                "--- /dev/null\n"
+                "+++ b/demo/index.html\n"
+                "@@ -0,0 +1,1 @@\n"
+                "+expected\n"
+            )
+
+            result = apply_patch_text(root, "code_diff", patch_text)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertIn("already exists in working directory", result["stderr"])
+            self.assertIn("diagnostic_file", result)
+        finally:
+            cleanup_workspace(root)
+
     def test_applies_chinese_patch_as_utf8_bytes(self):
         from src.agents.apply_and_run_tests_agent import apply_patch_text
 

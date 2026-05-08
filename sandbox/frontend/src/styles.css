@@ -456,6 +456,98 @@ button:focus-visible {
   background: #ffffff;
 }
 
+.agent-trace-section {
+  gap: 10px;
+}
+
+.agent-trace-file {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.agent-trace-file span {
+  color: #667789;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-trace-file code {
+  overflow-wrap: anywhere;
+  color: #25313f;
+  font-size: 12px;
+}
+
+.agent-trace-events {
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.agent-trace-events summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.agent-trace-event {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid #e0e6ee;
+}
+
+.agent-trace-event-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-trace-event-heading strong {
+  color: #25313f;
+  font-size: 13px;
+}
+
+.agent-trace-event-heading time {
+  color: #667789;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.agent-trace-event-summary {
+  margin: 0;
+  color: #425466;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-trace-payload summary {
+  padding: 0;
+  color: #4b5968;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-trace-payload pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #25313f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .artifact-field {
   min-width: 0;
 }

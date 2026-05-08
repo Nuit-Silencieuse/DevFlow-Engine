@@ -160,6 +160,17 @@ export interface DisplaySection {
   items: DisplayField[][];
 }
 
+export interface AgentTraceEventViewModel {
+  timestamp: string;
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+export interface AgentTraceViewModel {
+  traceFile: string;
+  recentEvents: AgentTraceEventViewModel[];
+}
+
 export interface CodeDiffLine {
   type: "add" | "delete" | "hunk" | "context" | "meta";
   text: string;
@@ -181,6 +192,7 @@ export interface StageArtifactViewModel {
   summaryFields: DisplayField[];
   sections: DisplaySection[];
   codeDiffFiles?: CodeDiffFile[];
+  agentTrace?: AgentTraceViewModel | null;
   raw: unknown;
 }
 
@@ -330,9 +342,12 @@ function buildCodeGenerationArtifact(
   const files = parseUnifiedDiff(diffText);
   const report = asRecord(output.code_generation_report);
   const diagnostics = report.llm_diagnostics ?? report.llmDiagnostics;
+  const agentTrace = report.agent_trace ?? report.agentTrace;
   const reportForDisplay: Record<string, unknown> = { ...report };
   delete reportForDisplay.llm_diagnostics;
   delete reportForDisplay.llmDiagnostics;
+  delete reportForDisplay.agent_trace;
+  delete reportForDisplay.agentTrace;
   return {
     title: "代码 Diff",
     sourceKey,
@@ -356,6 +371,7 @@ function buildCodeGenerationArtifact(
       objectListSection("LLM 诊断", diagnostics),
       objectListSection("生成报告", reportForDisplay),
     ]),
+    agentTrace: buildAgentTraceViewModel(agentTrace),
     raw: diffText,
   };
 }
@@ -588,6 +604,34 @@ function compactFields(entries: Array<[string, unknown]>): DisplayField[] {
 
 function compactSections(sections: Array<DisplaySection | null>): DisplaySection[] {
   return sections.filter((section): section is DisplaySection => !!section && section.items.length > 0);
+}
+
+function buildAgentTraceViewModel(value: unknown): AgentTraceViewModel | null {
+  const record = asRecord(value);
+  const events = Array.isArray(record.recent_events)
+    ? record.recent_events
+    : Array.isArray(record.recentEvents)
+      ? record.recentEvents
+      : [];
+  const recentEvents = events
+    .map((event) => {
+      const item = asRecord(event);
+      return {
+        timestamp: toDisplayText(item.timestamp ?? ""),
+        type: toDisplayText(item.type ?? ""),
+        payload: asRecord(item.payload),
+      };
+    })
+    .filter((event) => event.timestamp || event.type || Object.keys(event.payload).length > 0);
+
+  const traceFile = toDisplayText(record.trace_file ?? record.traceFile ?? "");
+  if (!traceFile && recentEvents.length === 0) {
+    return null;
+  }
+  return {
+    traceFile,
+    recentEvents,
+  };
 }
 
 function normalizeDisplayArray(value: unknown): Array<Record<string, unknown>> {

@@ -107,8 +107,11 @@ class ApplyAndRunTestsAgent:
         execution_results = [run_test_command(repository_path, command) for command in commands]
         failed_results = [item for item in execution_results if item.get("status") != "PASSED"]
         status = "FAILED" if failed_results else "PASSED"
+        applied_count = len(
+            [item for item in patch_results if item["status"] in ("APPLIED", "ALREADY_APPLIED")]
+        )
         summary = (
-            f"已应用 {len([item for item in patch_results if item['status'] == 'APPLIED'])} 个补丁，"
+            f"已应用 {applied_count} 个补丁，"
             f"执行 {len(execution_results)} 条测试命令，"
             f"{'存在失败命令' if failed_results else '全部通过'}。"
         )
@@ -201,6 +204,17 @@ def apply_patch_text(repository_path: Path, patch_name: str, patch_text: str) ->
             check=False,
         )
         if check_completed.returncode != 0:
+            already_applied_result = detect_already_applied_new_file_patch(
+                repository_path,
+                patch_name,
+                raw_patch_text,
+                patch_text,
+                check_completed,
+                normalization_applied,
+            )
+            if already_applied_result:
+                return already_applied_result
+
             result = {
                 "name": patch_name,
                 "status": "FAILED",
@@ -369,6 +383,103 @@ def write_apply_diagnostic_file(
 def normalize_patch_for_apply(patch_text: str) -> str:
     normalized = normalize_unified_diff_hunk_headers(strip_markdown_fence(patch_text))
     return ensure_trailing_newline(normalized)
+
+
+def detect_already_applied_new_file_patch(
+    repository_path: Path,
+    patch_name: str,
+    raw_patch_text: str,
+    normalized_patch_text: str,
+    check_completed: subprocess.CompletedProcess[bytes],
+    normalization_applied: bool,
+) -> dict[str, Any] | None:
+    stderr = decode_process_output(check_completed.stderr)
+    if "already exists in working directory" not in stderr:
+        return None
+
+    new_files = extract_new_file_contents(normalized_patch_text)
+    if not new_files:
+        return None
+
+    mismatches: list[str] = []
+    for relative_path, expected_content in new_files.items():
+        target_path = (repository_path / relative_path).resolve()
+        try:
+            target_path.relative_to(repository_path.resolve())
+        except ValueError:
+            mismatches.append(f"{relative_path}: path escapes repository root")
+            continue
+        if not target_path.is_file():
+            mismatches.append(f"{relative_path}: file does not exist")
+            continue
+        actual_content = target_path.read_text(encoding=GIT_APPLY_INPUT_ENCODING, errors="replace")
+        if actual_content != expected_content:
+            mismatches.append(f"{relative_path}: content differs from patch")
+
+    if mismatches:
+        return None
+
+    logger.warning(
+        "Patch was already applied and is treated as idempotent success. patch=%s files=%s",
+        patch_name,
+        list(new_files.keys()),
+    )
+    return {
+        "name": patch_name,
+        "status": "ALREADY_APPLIED",
+        "summary": "diff 已在工作区中，视为幂等成功。",
+        "stdout": limit_output(decode_process_output(check_completed.stdout)),
+        "stderr": limit_output(stderr),
+        "exit_code": check_completed.returncode,
+        "patch_line_count": count_patch_lines(raw_patch_text),
+        "normalized_patch_line_count": count_patch_lines(normalized_patch_text),
+        "normalization_applied": normalization_applied,
+        "idempotent": True,
+        "already_applied_files": list(new_files.keys()),
+    }
+
+
+def extract_new_file_contents(diff_patch: str) -> dict[str, str]:
+    files: dict[str, str] = {}
+    current_path: str | None = None
+    current_lines: list[str] = []
+    is_new_file = False
+    saw_no_newline_marker = False
+
+    def flush() -> None:
+        nonlocal current_path, current_lines, is_new_file, saw_no_newline_marker
+        if current_path and is_new_file:
+            content = "\n".join(current_lines)
+            if current_lines and not saw_no_newline_marker:
+                content += "\n"
+            files[current_path] = content
+        current_path = None
+        current_lines = []
+        is_new_file = False
+        saw_no_newline_marker = False
+
+    for line in diff_patch.splitlines():
+        if line.startswith("diff --git "):
+            flush()
+            continue
+        if line == "--- /dev/null":
+            is_new_file = True
+            continue
+        if is_new_file and line.startswith("+++ b/"):
+            current_path = line.removeprefix("+++ b/")
+            continue
+        if not is_new_file or current_path is None:
+            continue
+        if line.startswith("@@"):
+            continue
+        if line.startswith("\\ No newline at end of file"):
+            saw_no_newline_marker = True
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            current_lines.append(line[1:])
+
+    flush()
+    return files
 
 
 def strip_markdown_fence(text: str) -> str:
@@ -699,7 +810,8 @@ def build_command_error_message(result: dict[str, Any]) -> str:
     return f"{command} 执行失败，退出码：{result.get('exit_code')}"
 
 
-def limit_output(text: str) -> str:
+def limit_output(text: Any) -> str:
+    text = "" if text is None else str(text)
     if len(text) <= OUTPUT_LIMIT:
         return text
     return text[:OUTPUT_LIMIT] + "\n... output truncated ..."
