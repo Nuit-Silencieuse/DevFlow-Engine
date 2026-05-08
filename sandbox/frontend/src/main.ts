@@ -465,7 +465,7 @@ function renderStageList(
     const reviewState = checkpointReviewState(stage, pipeline);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `stage-row ${selectedStage?.name === stage.name ? "selected" : ""} ${reviewState === "required" ? "needs-review" : ""} ${reviewState === "reviewed" ? "reviewed" : ""}`;
+    button.className = `stage-row ${selectedStage?.name === stage.name ? "selected" : ""} ${reviewState === "required" ? "needs-review" : ""} ${reviewState === "reviewed" ? "reviewed" : ""} ${reviewState === "rejected" ? "rejected" : ""}`;
     button.addEventListener("click", () => {
       void selectStage(stage.name);
     });
@@ -476,6 +476,7 @@ function renderStageList(
     const meta = document.createElement("span");
     meta.className = "stage-meta";
     meta.textContent = `${stage.status}${reviewState === "required" ? " / 需要人工检查" : ""}${reviewState === "reviewed" ? " / 已审查" : ""}${stage.requiresHumanApproval && reviewState === "none" ? " / 需审查" : ""}${hasArtifact(stage) ? " / 有产物" : ""}`;
+    meta.textContent = stageMetaText(stage, reviewState);
     button.append(name, meta);
     stageList.append(button);
   }
@@ -485,6 +486,29 @@ function renderArtifact(stage: StageStatusResponse | null): void {
   artifactStage.textContent = stage ? `${stageLabel(stage.name)} · ${stage.status}` : "未选择阶段";
   renderCodeContext(stage);
   renderStageArtifact(stage);
+}
+
+function stageMetaText(
+  stage: StageStatusResponse,
+  reviewState: "required" | "reviewed" | "rejected" | "none",
+): string {
+  const parts = [stage.status];
+  if (reviewState === "required") {
+    parts.push("需要人工检查");
+  }
+  if (reviewState === "reviewed") {
+    parts.push("已审查");
+  }
+  if (reviewState === "rejected") {
+    parts.push("已 Reject，退回该阶段重新执行");
+  }
+  if (stage.requiresHumanApproval && reviewState === "none") {
+    parts.push("需审查");
+  }
+  if (stage.outputAvailable || hasArtifact(stage)) {
+    parts.push("有产物");
+  }
+  return parts.join(" / ");
 }
 
 function renderStageArtifact(stage: StageStatusResponse | null): void {
@@ -762,6 +786,8 @@ function renderCheckpoint(stage: StageStatusResponse | null, pipeline: PipelineS
     checkpointHint.textContent = "等待可审查阶段";
   } else if (reviewState === "required") {
     checkpointHint.textContent = `${stageLabel(stage.name)} 需要人工检查：请审查阶段产物后选择 Approve 或 Reject。`;
+  } else if (reviewState === "rejected") {
+    checkpointHint.textContent = `${stageLabel(stage.name)} 已被 Reject，流水线已退回该阶段重新执行；请等待新的阶段产物后再次审查。`;
   } else if (reviewState === "reviewed") {
     checkpointHint.textContent = `${stageLabel(stage.name)} 已经审查，流水线可继续执行后续阶段。`;
   } else if (stage.requiresHumanApproval) {
@@ -778,14 +804,17 @@ function renderCheckpoint(stage: StageStatusResponse | null, pipeline: PipelineS
 function checkpointReviewState(
   stage: StageStatusResponse | null,
   pipeline: PipelineStatusResponse | null,
-): "required" | "reviewed" | "none" {
+): "required" | "reviewed" | "rejected" | "none" {
   if (!stage?.requiresHumanApproval) {
     return "none";
   }
   if (pipeline?.status === "SUSPENDED" && pipeline.currentStage === stage.name) {
     return "required";
   }
-  if (stage.status === "COMPLETED" || stage.status === "REJECTED") {
+  if (stage.status === "REJECTED") {
+    return "rejected";
+  }
+  if (stage.status === "COMPLETED") {
     return "reviewed";
   }
   return "none";
