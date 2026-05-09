@@ -4,6 +4,8 @@ import com.devflow.engine.api.CheckpointDecisionRequest;
 import com.devflow.engine.api.CheckpointDecisionResponse;
 import com.devflow.engine.api.CreatePipelineRequest;
 import com.devflow.engine.api.CreatePipelineResponse;
+import com.devflow.engine.api.LlmProviderConfig;
+import com.devflow.engine.api.LlmRuntimeConfig;
 import com.devflow.engine.api.PipelineSummaryResponse;
 import com.devflow.engine.api.PipelineStatusResponse;
 import com.devflow.engine.api.RepositoryContext;
@@ -46,15 +48,22 @@ public class PipelineService {
         "SYSTEM_DESIGN",
         "CODE_GENERATION",
         "TEST_GENERATION",
-        "APPLY_AND_RUN_TESTS"
+        "APPLY_AND_RUN_TESTS",
+        "CODE_REVIEW"
     );
 
     private final PipelineRepository pipelineRepository;
     private final TemporalPipelineGateway temporalPipelineGateway;
+    private final LlmCredentialService credentialService;
 
-    public PipelineService(PipelineRepository pipelineRepository, TemporalPipelineGateway temporalPipelineGateway) {
+    public PipelineService(
+        PipelineRepository pipelineRepository,
+        TemporalPipelineGateway temporalPipelineGateway,
+        LlmCredentialService credentialService
+    ) {
         this.pipelineRepository = pipelineRepository;
         this.temporalPipelineGateway = temporalPipelineGateway;
+        this.credentialService = credentialService;
     }
 
     @Transactional
@@ -62,13 +71,14 @@ public class PipelineService {
         validateCreateRequest(request);
         List<String> requestedStages = normalizeStages(request.stages());
         RepositoryContext repository = normalizeRepository(request.repository());
+        LlmRuntimeConfig llmConfig = normalizeLlmConfig(request.llmConfig());
 
         Pipeline pipeline = new Pipeline(request.name());
         pipeline.setId(UUID.randomUUID());
         pipeline.setStatus(PipelineStatus.RUNNING);
         pipeline.setCurrentStage(requestedStages.get(0));
         String workflowId = TemporalPipelineGatewayImpl.workflowId(pipeline.getId(), request.name());
-        pipeline.setGlobalContext(createGlobalContext(request.requirement(), requestedStages, repository, workflowId));
+        pipeline.setGlobalContext(createGlobalContext(request.requirement(), requestedStages, repository, workflowId, llmConfig));
         requestedStages.forEach(stageName -> pipeline.addStage(createStage(stageName)));
 
         Pipeline saved = pipelineRepository.save(pipeline);
@@ -81,6 +91,23 @@ public class PipelineService {
         ));
 
         return new CreatePipelineResponse(saved.getId(), workflowId(saved), saved.getStatus().name());
+    }
+
+    @Transactional
+    public LlmRuntimeConfig updateLlmConfig(UUID pipelineId, LlmRuntimeConfig config) {
+        Pipeline pipeline = pipelineRepository.findById(pipelineId)
+            .orElseThrow(() -> new NoSuchElementException("Pipeline not found: " + pipelineId));
+        LlmRuntimeConfig normalized = normalizeLlmConfig(config);
+        Map<String, Object> globalContext = new LinkedHashMap<>(pipeline.getGlobalContext());
+        if (normalized == null) {
+            globalContext.remove("llm_config");
+        } else {
+            globalContext.put("llm_config", llmConfigToMap(normalized));
+        }
+        pipeline.setGlobalContext(globalContext);
+        pipelineRepository.save(pipeline);
+        temporalPipelineGateway.updateLlmConfig(workflowId(pipeline), pipelineId, globalContext.get("llm_config"));
+        return normalized;
     }
 
     @Transactional
@@ -197,7 +224,8 @@ public class PipelineService {
     private static boolean requiresHumanApproval(String stageName) {
         return "SYSTEM_DESIGN".equals(stageName)
             || "CODE_GENERATION".equals(stageName)
-            || "TEST_GENERATION".equals(stageName);
+            || "TEST_GENERATION".equals(stageName)
+            || "CODE_REVIEW".equals(stageName);
     }
 
     private static List<Stage> sortedStages(Pipeline pipeline, List<String> requestedOrder) {
@@ -346,7 +374,8 @@ public class PipelineService {
         String requirement,
         List<String> stages,
         RepositoryContext repository,
-        String workflowId
+        String workflowId,
+        LlmRuntimeConfig llmConfig
     ) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("original_requirement", requirement);
@@ -355,7 +384,100 @@ public class PipelineService {
         if (repository != null) {
             context.put("repository", repositoryToMap(repository));
         }
+        if (llmConfig != null) {
+            context.put("llm_config", llmConfigToMap(llmConfig));
+        }
         return context;
+    }
+
+    private LlmRuntimeConfig normalizeLlmConfig(LlmRuntimeConfig config) {
+        if (config == null) {
+            return null;
+        }
+        LlmProviderConfig defaultConfig = normalizeLlmProviderConfig(config.defaultConfig());
+        Map<String, LlmProviderConfig> stageOverrides = new LinkedHashMap<>();
+        if (config.stageOverrides() != null) {
+            config.stageOverrides().forEach((stageName, stageConfig) -> {
+                if (StringUtils.hasText(stageName)) {
+                    LlmProviderConfig normalized = normalizeLlmProviderConfig(stageConfig);
+                    if (normalized != null) {
+                        stageOverrides.put(stageName.trim().toUpperCase(), normalized);
+                    }
+                }
+            });
+        }
+        if (defaultConfig == null && stageOverrides.isEmpty()) {
+            return null;
+        }
+        return new LlmRuntimeConfig(defaultConfig, stageOverrides);
+    }
+
+    private LlmProviderConfig normalizeLlmProviderConfig(LlmProviderConfig config) {
+        if (config == null) {
+            return null;
+        }
+        String credentialId = trimToNull(config.credentialId());
+        if (StringUtils.hasText(config.apiKey())) {
+            String provider = trimToNull(config.provider());
+            credentialId = credentialService.createCredential(
+                provider == null ? "openai_compatible" : provider,
+                config.apiKey()
+            ).credentialId();
+        }
+        String provider = trimToNull(config.provider());
+        String baseUrl = trimToNull(config.baseUrl());
+        String model = trimToNull(config.model());
+        Integer timeout = config.timeoutSeconds() == null || config.timeoutSeconds() <= 0 ? null : config.timeoutSeconds();
+        Double temperature = config.temperature();
+        if (
+            provider == null
+                && baseUrl == null
+                && model == null
+                && credentialId == null
+                && timeout == null
+                && temperature == null
+        ) {
+            return null;
+        }
+        return new LlmProviderConfig(provider, baseUrl, null, credentialId, model, timeout, temperature);
+    }
+
+    private static Map<String, Object> llmConfigToMap(LlmRuntimeConfig config) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        if (config.defaultConfig() != null) {
+            value.put("default", llmProviderConfigToMap(config.defaultConfig()));
+        }
+        Map<String, Object> stageOverrides = new LinkedHashMap<>();
+        if (config.stageOverrides() != null) {
+            config.stageOverrides().forEach((stageName, stageConfig) -> {
+                if (stageConfig != null) {
+                    stageOverrides.put(stageName, llmProviderConfigToMap(stageConfig));
+                }
+            });
+        }
+        value.put("stageOverrides", stageOverrides);
+        return value;
+    }
+
+    private static Map<String, Object> llmProviderConfigToMap(LlmProviderConfig config) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        putIfPresent(value, "provider", config.provider());
+        putIfPresent(value, "baseUrl", config.baseUrl());
+        putIfPresent(value, "credentialId", config.credentialId());
+        putIfPresent(value, "model", config.model());
+        putIfPresent(value, "timeoutSeconds", config.timeoutSeconds());
+        putIfPresent(value, "temperature", config.temperature());
+        return value;
+    }
+
+    private static void putIfPresent(Map<String, Object> value, String key, Object item) {
+        if (item != null && (!(item instanceof String text) || StringUtils.hasText(text))) {
+            value.put(key, item);
+        }
+    }
+
+    private static String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private static String workflowId(Pipeline pipeline) {

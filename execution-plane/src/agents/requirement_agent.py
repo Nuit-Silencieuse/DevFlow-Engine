@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -20,6 +21,7 @@ from src.context import (
     search_text,
 )
 from src.llm import LlmClient, LlmMessage, LlmRequest
+from src.observability import AgentTraceRecorder
 from src.pipeline_context import (
     append_stage_code_context,
     context_pack_from_reused_code_context,
@@ -47,6 +49,7 @@ class RequirementAgentState(TypedDict, total=False):
     attempts: int
     errors: list[str]
     result: DevFlowState
+    agent_trace: dict[str, Any]
 
 
 class RequirementAgent:
@@ -60,38 +63,78 @@ class RequirementAgent:
     def __init__(self, llm_client: LlmClient | None = None, max_repair_attempts: int = 1):
         self.llm_client = llm_client or LlmClient.from_sources()
         self.max_repair_attempts = max_repair_attempts
+        self.agent_trace = AgentTraceRecorder.disabled()
         self.graph = build_requirement_agent_graph(self)
 
     def run(self, state: DevFlowState) -> DevFlowState:
-        result = self.graph.invoke(
+        self.agent_trace = AgentTraceRecorder.from_sources(
+            pipeline_id=str(state.get("pipeline_id") or state.get("pipelineId") or "unknown")
+        )
+        self.agent_trace.record(
+            "agent.start",
             {
-                "devflow_state": state,
-                "attempts": 0,
-                "errors": list(state.get("error_logs", [])),
-            }
+                "stage": REQUIREMENT_ANALYSIS,
+                "agent": "RequirementAgent",
+                "pipelineId": state.get("pipeline_id") or state.get("pipelineId"),
+                "inputSummary": summarize_requirement_state_for_trace(state),
+            },
+        )
+        started_at = time.monotonic()
+        try:
+            result = self.graph.invoke(
+                {
+                    "devflow_state": state,
+                    "attempts": 0,
+                    "errors": list(state.get("error_logs", [])),
+                }
+            )
+        except Exception as exc:
+            self.agent_trace.record(
+                "agent.error",
+                {
+                    "stage": REQUIREMENT_ANALYSIS,
+                    "agent": "RequirementAgent",
+                    "durationMs": elapsed_ms(started_at),
+                    "errorType": type(exc).__name__,
+                    "errorMessage": str(exc),
+                },
+            )
+            raise
+        self.agent_trace.record(
+            "agent.end",
+            {
+                "stage": REQUIREMENT_ANALYSIS,
+                "agent": "RequirementAgent",
+                "durationMs": elapsed_ms(started_at),
+                "outputSummary": summarize_requirement_state_for_trace(result.get("result") or {}),
+            },
         )
         return result["result"]
 
     def prepare_input(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("prepare_input", summarize_requirement_state_for_trace(state.get("devflow_state") or {}))
         devflow_state = state["devflow_state"]
         requirement_text = normalize_text(devflow_state.get("original_requirement", ""))
         feedback_text = normalize_text(devflow_state.get("human_feedback", ""))
         errors = list(state.get("errors", []))
         if not requirement_text:
             errors.append("original_requirement is required for requirement analysis")
-        return {
+        result = {
             "requirement_text": requirement_text,
             "feedback_text": feedback_text,
             "errors": errors,
         }
+        self.record_node_end("prepare_input", started_at, summarize_requirement_agent_state(result))
+        return result
 
     def collect_context(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("collect_context", summarize_requirement_agent_state(state))
         devflow_state = state["devflow_state"]
         repository_payload = devflow_state.get("repository_context")
         existing_code_context = dict(devflow_state.get("code_context") or {})
         pipeline_context = normalize_pipeline_context(devflow_state.get("pipeline_context"))
         if not repository_payload:
-            return {
+            result = {
                 "context_pack": {
                     "status": "SKIPPED",
                     "root_path": "",
@@ -113,10 +156,14 @@ class RequirementAgent:
                     "notes": ["未提供 repository_context，需求分析仅基于用户输入。"],
                 }
             }
+            self.record_node_end("collect_context", started_at, summarize_requirement_agent_state(result))
+            return result
 
         request = RepositoryExplorationRequest.from_mapping(repository_payload)
         if request is None:
-            return {"context_pack": {"status": "SKIPPED", "files": [], "inspected_files": [], "search_queries": []}}
+            result = {"context_pack": {"status": "SKIPPED", "files": [], "inspected_files": [], "search_queries": []}}
+            self.record_node_end("collect_context", started_at, summarize_requirement_agent_state(result))
+            return result
 
         # 渐进式披露不是 RequirementAgent 的私有缓存，而是整个流水线共享的上下文能力。
         # 因此在真正调用 compact map / search / read 之前，先检查前序阶段是否已经留下
@@ -133,12 +180,15 @@ class RequirementAgent:
                     "confidence": reusable_code_context.get("confidence", 0.0),
                 },
             )
-            return {"context_pack": context_pack}
+            result = {"context_pack": context_pack}
+            self.record_node_end("collect_context", started_at, summarize_requirement_agent_state(result))
+            return result
 
         context_pack = progressively_collect_context(
             request,
             state.get("requirement_text", ""),
             llm_client=self.llm_client,
+            trace_recorder=self.agent_trace,
         )
         self.llm_client.trace_recorder.record(
             "requirement_agent.context_pack",
@@ -162,9 +212,12 @@ class RequirementAgent:
                 ],
             },
         )
-        return {"context_pack": context_pack}
+        result = {"context_pack": context_pack}
+        self.record_node_end("collect_context", started_at, summarize_requirement_agent_state(result))
+        return result
 
     def plan_analysis(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("plan_analysis", summarize_requirement_agent_state(state))
         requirement_type = infer_requirement_type(state.get("requirement_text", ""))
         analysis_plan = {
             "requirement_type": requirement_type,
@@ -185,23 +238,35 @@ class RequirementAgent:
             "requirement_agent.analysis_plan",
             {"analysis_plan": analysis_plan},
         )
-        return {"analysis_plan": analysis_plan}
+        result = {"analysis_plan": analysis_plan}
+        self.record_node_end("plan_analysis", started_at, summarize_requirement_agent_state({**state, **result}))
+        return result
 
     def draft_prd(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("draft_prd", summarize_requirement_agent_state(state))
         request = LlmRequest(
             task="requirement_analysis",
             messages=build_messages(state),
             json_schema=REQUIREMENT_PRD_SCHEMA,
             metadata={"stage": REQUIREMENT_ANALYSIS},
         )
-        draft = self.llm_client.complete_json(request)
+        llm_started_at = record_trace_llm_start(self.agent_trace, "draft_prd", request)
+        try:
+            draft = self.llm_client.complete_json(request)
+        except Exception as exc:
+            record_trace_llm_error(self.agent_trace, "draft_prd", llm_started_at, exc)
+            raise
+        record_trace_llm_end(self.agent_trace, "draft_prd", llm_started_at, summarize_prd_payload(draft))
         self.llm_client.trace_recorder.record(
             "requirement_agent.draft_prd",
             {"draft_prd": draft},
         )
-        return {"draft_prd": draft}
+        result = {"draft_prd": draft}
+        self.record_node_end("draft_prd", started_at, summarize_requirement_agent_state({**state, **result}))
+        return result
 
     def validate_prd(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("validate_prd", summarize_requirement_agent_state(state))
         draft = normalize_prd(
             state.get("draft_prd") or {},
             state.get("requirement_text", ""),
@@ -219,12 +284,15 @@ class RequirementAgent:
             "requirement_agent.validation_report",
             {"validation_report": validation_report},
         )
-        return {
+        result = {
             "draft_prd": draft,
             "validation_report": validation_report,
         }
+        self.record_node_end("validate_prd", started_at, summarize_requirement_agent_state({**state, **result}))
+        return result
 
     def repair_prd(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("repair_prd", summarize_requirement_agent_state(state))
         # 修复只处理结构缺口，不根据规则生成完整需求内容。这样可以保证测试稳定，
         # 但不会把 Agent 变回 RuleBasedRequirementAnalyzer。
         repaired = normalize_prd(
@@ -234,13 +302,17 @@ class RequirementAgent:
             state.get("feedback_text", ""),
         )
         repaired = repair_structural_prd_gaps(repaired, state.get("requirement_text", ""))
-        return {
+        result = {
             "draft_prd": repaired,
             "attempts": int(state.get("attempts", 0)) + 1,
         }
+        self.record_node_end("repair_prd", started_at, summarize_requirement_agent_state({**state, **result}))
+        return result
 
     def finalize(self, state: RequirementAgentState) -> RequirementAgentState:
-        prd = state.get("draft_prd") or {}
+        started_at = self.record_node_start("finalize", summarize_requirement_agent_state(state))
+        prd = dict(state.get("draft_prd") or {})
+        prd["agent_trace"] = self.agent_trace.diagnostics()
         context_pack = state.get("context_pack") or {}
         code_context = {
             "status": context_pack.get("status", "COMPLETE" if context_pack.get("files") else "SKIPPED"),
@@ -268,7 +340,7 @@ class RequirementAgent:
             code_context=code_context,
             artifacts={"structured_prd": prd},
         )
-        return {
+        result = {
             "result": {
                 "structured_prd": prd,
                 "code_context": code_context,
@@ -280,8 +352,11 @@ class RequirementAgent:
                 "error_logs": list(state.get("errors", [])),
             }
         }
+        self.record_node_end("finalize", started_at, summarize_requirement_state_for_trace(result["result"]))
+        return result
 
     def fail_soft(self, state: RequirementAgentState) -> RequirementAgentState:
+        started_at = self.record_node_start("fail_soft", summarize_requirement_agent_state(state))
         requirement_text = state.get("requirement_text", "")
         errors = list(state.get("errors", [])) or ["requirement analysis failed"]
         code_context = {
@@ -297,7 +372,7 @@ class RequirementAgent:
             code_context=code_context,
             artifacts={},
         )
-        return {
+        result = {
             "result": {
                 "structured_prd": {
                     "summary": requirement_text,
@@ -316,6 +391,7 @@ class RequirementAgent:
                         "has_open_questions": True,
                         "confidence": "LOW",
                     },
+                    "agent_trace": self.agent_trace.diagnostics(),
                     "source": "requirement_agent",
                 },
                 "code_context": code_context,
@@ -327,6 +403,33 @@ class RequirementAgent:
                 "error_logs": errors,
             }
         }
+        self.record_node_end("fail_soft", started_at, summarize_requirement_state_for_trace(result["result"]))
+        return result
+
+    def record_node_start(self, node: str, input_summary: dict[str, Any]) -> float:
+        started_at = time.monotonic()
+        self.agent_trace.record(
+            "agent.node.start",
+            {
+                "stage": REQUIREMENT_ANALYSIS,
+                "agent": "RequirementAgent",
+                "node": node,
+                "inputSummary": input_summary,
+            },
+        )
+        return started_at
+
+    def record_node_end(self, node: str, started_at: float, output_summary: dict[str, Any]) -> None:
+        self.agent_trace.record(
+            "agent.node.end",
+            {
+                "stage": REQUIREMENT_ANALYSIS,
+                "agent": "RequirementAgent",
+                "node": node,
+                "durationMs": elapsed_ms(started_at),
+                "outputSummary": output_summary,
+            },
+        )
 
 
 def build_requirement_agent_graph(agent: RequirementAgent):
@@ -358,6 +461,210 @@ def build_requirement_agent_graph(agent: RequirementAgent):
     builder.add_edge("finalize", END)
     builder.add_edge("fail_soft", END)
     return builder.compile()
+
+
+def elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def summarize_requirement_state_for_trace(state: dict[str, Any]) -> dict[str, Any]:
+    errors = state.get("error_logs") or state.get("errors") or []
+    if not isinstance(errors, list):
+        errors = [str(errors)]
+    requirement = str(state.get("original_requirement") or state.get("requirement_text") or "")
+    return {
+        "keys": sorted(str(key) for key in state.keys()),
+        "requirementChars": len(requirement),
+        "hasRepositoryContext": bool(state.get("repository_context")),
+        "hasPipelineContext": bool(state.get("pipeline_context")),
+        "hasCodeContext": bool(state.get("code_context") or state.get("codeContext")),
+        "currentStep": state.get("current_step") or state.get("currentStep") or "",
+        "errorCount": len(errors),
+    }
+
+
+def summarize_requirement_agent_state(state: dict[str, Any]) -> dict[str, Any]:
+    errors = state.get("errors") or []
+    if not isinstance(errors, list):
+        errors = [str(errors)]
+    return {
+        "requirementChars": len(str(state.get("requirement_text") or "")),
+        "feedbackChars": len(str(state.get("feedback_text") or "")),
+        "hasContextPack": bool(state.get("context_pack")),
+        "contextPack": summarize_context_pack(state.get("context_pack")),
+        "hasAnalysisPlan": bool(state.get("analysis_plan")),
+        "draftPrd": summarize_prd_payload(state.get("draft_prd")),
+        "validation": {
+            "valid": (state.get("validation_report") or {}).get("valid"),
+            "issueCount": len((state.get("validation_report") or {}).get("issues") or []),
+            "repairable": (state.get("validation_report") or {}).get("repairable"),
+        },
+        "attempts": int(state.get("attempts", 0) or 0),
+        "errorCount": len(errors),
+    }
+
+
+def summarize_context_pack(value: Any) -> dict[str, Any]:
+    context_pack = value if isinstance(value, dict) else {}
+    budget = context_pack.get("budget_usage") or {}
+    return {
+        "status": context_pack.get("status", ""),
+        "rootPath": context_pack.get("root_path", ""),
+        "fileCount": len(context_pack.get("files") or []),
+        "inspectedFileCount": len(context_pack.get("inspected_files") or []),
+        "searchQueryCount": len(context_pack.get("search_queries") or []),
+        "candidateFileCount": len(context_pack.get("candidate_files") or []),
+        "evidenceCount": len(context_pack.get("evidence") or []),
+        "skippedPathCount": len(context_pack.get("skipped_paths") or []),
+        "totalBytes": context_pack.get("total_bytes", 0),
+        "confidence": context_pack.get("confidence", 0.0),
+        "budget": budget,
+    }
+
+
+def summarize_prd_payload(value: Any) -> dict[str, Any]:
+    prd = value if isinstance(value, dict) else {}
+    return {
+        "keys": sorted(str(key) for key in prd.keys()),
+        "summaryChars": len(str(prd.get("summary") or "")),
+        "userStoryCount": len(prd.get("user_stories") or []),
+        "acceptanceCriteriaCount": len(prd.get("acceptance_criteria") or []),
+        "edgeCaseCount": len(prd.get("edge_cases") or []),
+        "openQuestionCount": len(prd.get("open_questions") or []),
+        "confidence": (prd.get("quality") or {}).get("confidence"),
+    }
+
+
+def record_trace_tool_start(
+    trace_recorder: AgentTraceRecorder | None,
+    node: str,
+    tool: str,
+    payload: dict[str, Any] | None = None,
+) -> float:
+    started_at = time.monotonic()
+    if trace_recorder is not None:
+        trace_recorder.record(
+            "agent.tool.start",
+            {
+                "stage": REQUIREMENT_ANALYSIS,
+                "agent": "RequirementAgent",
+                "node": node,
+                "tool": tool,
+                "inputSummary": payload or {},
+            },
+        )
+    return started_at
+
+
+def record_trace_tool_end(
+    trace_recorder: AgentTraceRecorder | None,
+    node: str,
+    tool: str,
+    started_at: float,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    if trace_recorder is None:
+        return
+    trace_recorder.record(
+        "agent.tool.end",
+        {
+            "stage": REQUIREMENT_ANALYSIS,
+            "agent": "RequirementAgent",
+            "node": node,
+            "tool": tool,
+            "durationMs": elapsed_ms(started_at),
+            "outputSummary": payload or {},
+        },
+    )
+
+
+def record_trace_tool_error(
+    trace_recorder: AgentTraceRecorder | None,
+    node: str,
+    tool: str,
+    started_at: float,
+    exc: Exception,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    if trace_recorder is None:
+        return
+    trace_recorder.record(
+        "agent.tool.error",
+        {
+            "stage": REQUIREMENT_ANALYSIS,
+            "agent": "RequirementAgent",
+            "node": node,
+            "tool": tool,
+            "durationMs": elapsed_ms(started_at),
+            "errorType": type(exc).__name__,
+            "errorMessage": str(exc),
+            "context": payload or {},
+        },
+    )
+
+
+def record_trace_llm_start(
+    trace_recorder: AgentTraceRecorder | None,
+    node: str,
+    request: LlmRequest,
+) -> float:
+    started_at = time.monotonic()
+    if trace_recorder is not None:
+        trace_recorder.record(
+            "agent.llm.start",
+            {
+                "stage": REQUIREMENT_ANALYSIS,
+                "agent": "RequirementAgent",
+                "node": node,
+                "task": request.task,
+                "timeoutSeconds": request.timeout_seconds,
+                "messageCount": len(request.messages),
+                "schemaKeys": sorted((request.json_schema or {}).keys()),
+                "metadata": request.metadata,
+            },
+        )
+    return started_at
+
+
+def record_trace_llm_end(
+    trace_recorder: AgentTraceRecorder | None,
+    node: str,
+    started_at: float,
+    response_summary: dict[str, Any] | None = None,
+) -> None:
+    if trace_recorder is None:
+        return
+    trace_recorder.record(
+        "agent.llm.end",
+        {
+            "stage": REQUIREMENT_ANALYSIS,
+            "agent": "RequirementAgent",
+            "node": node,
+            "durationMs": elapsed_ms(started_at),
+            "responseSummary": response_summary or {},
+        },
+    )
+
+
+def record_trace_llm_error(
+    trace_recorder: AgentTraceRecorder | None,
+    node: str,
+    started_at: float,
+    exc: Exception,
+) -> None:
+    if trace_recorder is None:
+        return
+    trace_recorder.record(
+        "agent.llm.error",
+        {
+            "stage": REQUIREMENT_ANALYSIS,
+            "agent": "RequirementAgent",
+            "node": node,
+            "durationMs": elapsed_ms(started_at),
+            "errorType": type(exc).__name__,
+            "errorMessage": str(exc),
+        },
+    )
 
 
 def route_after_prepare(state: RequirementAgentState) -> Literal["valid", "invalid"]:
@@ -583,6 +890,7 @@ def progressively_collect_context(
     requirement_text: str,
     *,
     llm_client: LlmClient | None = None,
+    trace_recorder: AgentTraceRecorder | None = None,
 ) -> dict[str, Any]:
     """用工具调用式渐进披露循环收集代码上下文。
 
@@ -593,8 +901,43 @@ def progressively_collect_context(
 
     steps: list[ExplorationStep] = []
     notes: list[str] = []
-    repo_map = inspect_compact_repository_map(request)
-    plan = build_exploration_plan(request, requirement_text, repo_map, llm_client)
+    tool_started_at = record_trace_tool_start(
+        trace_recorder,
+        "collect_context",
+        "inspect_compact_repository_map",
+        {
+            "rootPath": str(request.resolved_root),
+            "includePathCount": len(request.include_paths),
+            "targetFileCount": len(request.target_files),
+            "maxFiles": request.budget.max_files,
+        },
+    )
+    try:
+        repo_map = inspect_compact_repository_map(request)
+    except Exception as exc:
+        record_trace_tool_error(
+            trace_recorder,
+            "collect_context",
+            "inspect_compact_repository_map",
+            tool_started_at,
+            exc,
+        )
+        raise
+    record_trace_tool_end(
+        trace_recorder,
+        "collect_context",
+        "inspect_compact_repository_map",
+        tool_started_at,
+        {
+            "fileCount": len(repo_map.files),
+            "directoryCount": len(repo_map.directory_summaries),
+            "highSignalFileCount": len(repo_map.high_signal_files),
+            "entrypointFileCount": len(repo_map.entrypoint_files),
+            "skippedCount": len(repo_map.skipped),
+        },
+    )
+
+    plan = build_exploration_plan(request, requirement_text, repo_map, llm_client, trace_recorder=trace_recorder)
     if not plan.get("used_llm"):
         notes.append("LLM exploration plan unavailable; used compact repository map fallback.")
 
@@ -613,7 +956,24 @@ def progressively_collect_context(
         )
     )
 
-    listing = list_repository(request)
+    tool_started_at = record_trace_tool_start(
+        trace_recorder,
+        "collect_context",
+        "list_repository",
+        {"maxFiles": request.budget.max_files, "rootPath": str(request.resolved_root)},
+    )
+    try:
+        listing = list_repository(request)
+    except Exception as exc:
+        record_trace_tool_error(trace_recorder, "collect_context", "list_repository", tool_started_at, exc)
+        raise
+    record_trace_tool_end(
+        trace_recorder,
+        "collect_context",
+        "list_repository",
+        tool_started_at,
+        {"fileCount": len(listing.files), "skippedCount": len(listing.skipped)},
+    )
     skipped_paths = [
         {"path": item.path, "reason": item.reason, "detail": item.detail}
         for item in (*repo_map.skipped, *listing.skipped)
@@ -648,7 +1008,35 @@ def progressively_collect_context(
     matched_queries: set[str] = set()
     queries = tuple(plan.get("queries", []))[: request.budget.max_searches]
     for query in queries:
-        matches = search_text(request, query, max_results=request.budget.max_search_results)
+        tool_started_at = record_trace_tool_start(
+            trace_recorder,
+            "collect_context",
+            "search_text",
+            {"query": query, "maxResults": request.budget.max_search_results},
+        )
+        try:
+            matches = search_text(request, query, max_results=request.budget.max_search_results)
+        except Exception as exc:
+            record_trace_tool_error(
+                trace_recorder,
+                "collect_context",
+                "search_text",
+                tool_started_at,
+                exc,
+                {"query": query},
+            )
+            raise
+        record_trace_tool_end(
+            trace_recorder,
+            "collect_context",
+            "search_text",
+            tool_started_at,
+            {
+                "query": query,
+                "matchCount": len(matches),
+                "matchedFiles": _ordered_unique([match.path for match in matches])[:20],
+            },
+        )
         searches_used += 1
         if matches:
             matched_queries.add(query)
@@ -667,12 +1055,35 @@ def progressively_collect_context(
             )
         )
 
+    tool_started_at = record_trace_tool_start(
+        trace_recorder,
+        "collect_context",
+        "score_context_candidates",
+        {
+            "mapCandidateCount": len(map_candidate_paths),
+            "matchedFileCount": len(matches_by_path),
+            "targetFileCount": len(request.target_files),
+        },
+    )
     scored_candidates = score_context_candidates(
         request,
         plan,
         repository_files,
         map_candidate_paths,
         matches_by_path,
+    )
+    record_trace_tool_end(
+        trace_recorder,
+        "collect_context",
+        "score_context_candidates",
+        tool_started_at,
+        {
+            "candidateCount": len(scored_candidates),
+            "topCandidates": [
+                {"path": path, "score": round(score, 3), "reasonCount": len(reasons)}
+                for path, score, reasons in scored_candidates[:10]
+            ],
+        },
     )
     steps.append(
         ExplorationStep(
@@ -703,6 +1114,17 @@ def progressively_collect_context(
         if remaining <= 0:
             break
         line_start, line_end = choose_read_range(path, matches_by_path, read_ranges)
+        tool_started_at = record_trace_tool_start(
+            trace_recorder,
+            "collect_context",
+            "read_file_range",
+            {
+                "path": path,
+                "lineStart": line_start,
+                "lineEnd": line_end,
+                "remainingBytes": remaining,
+            },
+        )
         try:
             read_result = read_file_range(
                 request,
@@ -712,8 +1134,29 @@ def progressively_collect_context(
                 max_bytes=min(remaining, 16_000),
             )
         except (OSError, UnicodeError, ValueError) as exc:
+            record_trace_tool_error(
+                trace_recorder,
+                "collect_context",
+                "read_file_range",
+                tool_started_at,
+                exc,
+                {"path": path, "lineStart": line_start, "lineEnd": line_end},
+            )
             skipped_paths.append({"path": path, "reason": "READ_ERROR", "detail": str(exc)})
             continue
+        record_trace_tool_end(
+            trace_recorder,
+            "collect_context",
+            "read_file_range",
+            tool_started_at,
+            {
+                "path": read_result.path,
+                "lineStart": read_result.line_start,
+                "lineEnd": read_result.line_end,
+                "bytesRead": read_result.bytes_read,
+                "truncated": read_result.truncated,
+            },
+        )
 
         candidate_score, score_reasons = candidate_score_details(path, scored_candidates)
         files.append(
@@ -788,6 +1231,17 @@ def progressively_collect_context(
             "候选文件列表达到 maxFiles 上限，compact map/list_repository 未覆盖全部仓库；"
             "这只表示候选发现被截断，不等同于已读取证据预算耗尽。"
         )
+    tool_started_at = record_trace_tool_start(
+        trace_recorder,
+        "collect_context",
+        "evaluate_context",
+        {
+            "evidenceCount": len(evidence),
+            "strongEvidenceCount": strong_evidence_count,
+            "matchedQueryCount": matched_query_count,
+            "readLimit": read_limit,
+        },
+    )
     confidence = calculate_context_confidence(
         evidence_count=len(evidence),
         strong_evidence_count=strong_evidence_count,
@@ -798,6 +1252,13 @@ def progressively_collect_context(
         read_limit=read_limit,
         target_file_count=len(request.target_files),
         inspected_target_count=sum(1 for path in request.target_files if path in inspected_files),
+    )
+    record_trace_tool_end(
+        trace_recorder,
+        "collect_context",
+        "evaluate_context",
+        tool_started_at,
+        {"confidence": confidence, "readBudgetExhausted": read_budget_exhausted},
     )
     open_questions = []
     if confidence < 0.5:
@@ -844,25 +1305,56 @@ def build_exploration_plan(
     requirement_text: str,
     repo_map: CompactRepositoryMap,
     llm_client: LlmClient | None,
+    *,
+    trace_recorder: AgentTraceRecorder | None = None,
 ) -> dict[str, Any]:
     if llm_client is None:
-        return fallback_exploration_plan(request, repo_map)
-    try:
-        raw_plan = llm_client.complete_json(
-            LlmRequest(
-                task="progressive_context_exploration_plan",
-                messages=build_exploration_plan_messages(requirement_text, repo_map, request),
-                json_schema=EXPLORATION_PLAN_SCHEMA,
-                temperature=0.0,
-                metadata={"stage": REQUIREMENT_ANALYSIS, "rootPath": str(request.resolved_root)},
+        if trace_recorder is not None:
+            trace_recorder.record(
+                "agent.llm.skipped",
+                {
+                    "stage": REQUIREMENT_ANALYSIS,
+                    "agent": "RequirementAgent",
+                    "node": "collect_context",
+                    "task": "progressive_context_exploration_plan",
+                    "reason": "llm_client is not configured",
+                },
             )
-        )
-    except Exception:
+        return fallback_exploration_plan(request, repo_map)
+    llm_request = LlmRequest(
+        task="progressive_context_exploration_plan",
+        messages=build_exploration_plan_messages(requirement_text, repo_map, request),
+        json_schema=EXPLORATION_PLAN_SCHEMA,
+        temperature=0.0,
+        metadata={"stage": REQUIREMENT_ANALYSIS, "rootPath": str(request.resolved_root)},
+    )
+    llm_started_at = record_trace_llm_start(trace_recorder, "collect_context", llm_request)
+    try:
+        raw_plan = llm_client.complete_json(llm_request)
+    except Exception as exc:
+        record_trace_llm_error(trace_recorder, "collect_context", llm_started_at, exc)
         return fallback_exploration_plan(request, repo_map)
     plan = normalize_exploration_plan(raw_plan)
     if not plan.get("queries") and not plan.get("path_hints") and not plan.get("read_ranges"):
+        record_trace_llm_end(
+            trace_recorder,
+            "collect_context",
+            llm_started_at,
+            {"usedFallback": True, "reason": "empty exploration plan"},
+        )
         return fallback_exploration_plan(request, repo_map)
     plan["used_llm"] = True
+    record_trace_llm_end(
+        trace_recorder,
+        "collect_context",
+        llm_started_at,
+        {
+            "usedFallback": False,
+            "queryCount": len(plan.get("queries") or []),
+            "pathHintCount": len(plan.get("path_hints") or []),
+            "readRangeCount": len(plan.get("read_ranges") or []),
+        },
+    )
     return plan
 
 

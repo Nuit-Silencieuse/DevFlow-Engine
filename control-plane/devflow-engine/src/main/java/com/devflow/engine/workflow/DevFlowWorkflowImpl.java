@@ -24,6 +24,7 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
     private DevFlowWorkflowInput input;
     private WorkflowStatusSnapshot status;
     private CheckpointSignal checkpointSignal;
+    private Map<String, Object> latestLlmConfig = new LinkedHashMap<>();
 
     public DevFlowWorkflowImpl() {
         this(Workflow.newActivityStub(
@@ -51,6 +52,7 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
             globalContext.putAll(input.globalContext());
         }
         globalContext.putIfAbsent("original_requirement", input.requirement());
+        latestLlmConfig = copyMap(globalContext.get("llm_config"));
 
         List<String> stages = input.stages() == null || input.stages().isEmpty() ? DEFAULT_STAGES : input.stages();
         Map<String, Object> previousOutput = Map.of();
@@ -119,6 +121,11 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
     }
 
     @Override
+    public void updateLlmConfig(LlmConfigSignal signal) {
+        latestLlmConfig = copyMap(signal.llmConfig());
+    }
+
+    @Override
     public WorkflowStatusSnapshot getStatus() {
         return status;
     }
@@ -137,6 +144,11 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
         Map<String, Object> previousOutput
     ) {
         updateStatus("RUNNING", stageName);
+        if (latestLlmConfig == null || latestLlmConfig.isEmpty()) {
+            globalContext.remove("llm_config");
+        } else {
+            globalContext.put("llm_config", Map.copyOf(latestLlmConfig));
+        }
         StageExecutionRequest request = new StageExecutionRequest(
             input.pipelineId(),
             stageName,
@@ -193,5 +205,14 @@ public class DevFlowWorkflowImpl implements DevFlowWorkflow {
 
     private static String safeFeedback(String feedback) {
         return feedback == null ? "" : feedback;
+    }
+
+    private static Map<String, Object> copyMap(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return new LinkedHashMap<>();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
     }
 }

@@ -1,4 +1,5 @@
 ﻿import { PipelineApiClient, PipelineApiError } from "./api";
+// @ts-ignore
 import "./styles.css";
 import type {
   CheckpointDecision,
@@ -11,6 +12,7 @@ import type {
 import {
   buildCodeContextViewModel,
   buildCreatePipelineRequest,
+  buildLlmRuntimeConfig,
   buildStageArtifactViewModel,
   DEFAULT_STAGE_NAMES,
   formatJson,
@@ -125,6 +127,66 @@ control-plane/devflow-engine/src/main/java/com/devflow/engine/api/PipelineContro
 sandbox/frontend/src/main.ts</textarea>
           </label>
         </div>
+
+        <details class="llm-config-panel" open>
+          <summary>模型配置</summary>
+          <div class="llm-config-grid">
+            <label class="field">
+              <span>默认 Provider</span>
+              <input name="llmProvider" value="openai_compatible" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>默认 Base URL</span>
+              <input name="llmBaseUrl" value="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>默认 API Key</span>
+              <input name="llmApiKey" type="password" autocomplete="off" placeholder="只发送到控制平面换取 credentialId" />
+            </label>
+            <label class="field">
+              <span>默认 Model</span>
+              <input name="llmModel" value="qwen3.5-plus-2026-02-15" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>默认 Timeout 秒</span>
+              <input name="llmTimeoutSeconds" value="240" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span>默认 Temperature</span>
+              <input name="llmTemperature" value="0" inputmode="decimal" />
+            </label>
+          </div>
+          <div class="llm-config-grid">
+            <label class="field">
+              <span>代码生成 Provider</span>
+              <input name="codeLlmProvider" value="openai_compatible" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>代码生成 Base URL</span>
+              <input name="codeLlmBaseUrl" value="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>代码生成 API Key</span>
+              <input name="codeLlmApiKey" type="password" autocomplete="off" placeholder="留空则复用默认凭据" />
+            </label>
+            <label class="field">
+              <span>代码生成 Model</span>
+              <input name="codeLlmModel" placeholder="例如 qwen-coder-plus" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>代码生成 Timeout 秒</span>
+              <input name="codeLlmTimeoutSeconds" value="360" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span>代码生成 Temperature</span>
+              <input name="codeLlmTemperature" value="0" inputmode="decimal" />
+            </label>
+          </div>
+          <div class="llm-action-row">
+            <button id="testLlmButton" class="secondary-button" type="button">测试模型配置</button>
+            <button id="updateLlmButton" class="secondary-button" type="button">更新当前流水线模型</button>
+          </div>
+        </details>
       </form>
 
       <section class="panel monitor-panel">
@@ -175,6 +237,8 @@ sandbox/frontend/src/main.ts</textarea>
 
 const createForm = mustGet<HTMLFormElement>("createForm");
 const createButton = mustGet<HTMLButtonElement>("createButton");
+const testLlmButton = mustGet<HTMLButtonElement>("testLlmButton");
+const updateLlmButton = mustGet<HTMLButtonElement>("updateLlmButton");
 const refreshButton = mustGet<HTMLButtonElement>("refreshButton");
 const pipelineIdInput = mustGet<HTMLInputElement>("pipelineIdInput");
 const globalStatus = mustGet<HTMLSpanElement>("globalStatus");
@@ -225,6 +289,30 @@ createForm.addEventListener("submit", async (event) => {
 });
 
 refreshButton.addEventListener("click", () => withLoading(refreshPipeline));
+
+testLlmButton.addEventListener("click", () => withLoading(async () => {
+  const config = buildLlmRuntimeConfig(readCreateForm())?.defaultConfig;
+  if (!config) {
+    throw new Error("请先填写默认模型配置。");
+  }
+  const response = await api.testLlmConfig(config);
+  state.message = `${response.status}: ${response.provider} / ${response.model}`;
+  render();
+}));
+
+updateLlmButton.addEventListener("click", () => withLoading(async () => {
+  const pipelineId = pipelineIdInput.value.trim();
+  if (!pipelineId) {
+    throw new Error("请先创建或填写 Pipeline ID。");
+  }
+  const llmConfig = buildLlmRuntimeConfig(readCreateForm());
+  if (!llmConfig) {
+    throw new Error("请至少填写一个模型配置字段。");
+  }
+  await api.updatePipelineLlmConfig(pipelineId, llmConfig);
+  state.message = "已更新流水线模型配置；当前正在运行的 Activity 不会被中断，后续阶段或重跑阶段会使用新配置。";
+  await refreshPipeline();
+}));
 
 submitDecisionButton.addEventListener("click", async () => {
   await withLoading(async () => {
@@ -284,6 +372,18 @@ function readCreateForm() {
     targetFiles: String(data.get("targetFiles") ?? ""),
     maxFiles: String(data.get("maxFiles") ?? ""),
     maxBytes: String(data.get("maxBytes") ?? ""),
+    llmProvider: String(data.get("llmProvider") ?? ""),
+    llmBaseUrl: String(data.get("llmBaseUrl") ?? ""),
+    llmApiKey: String(data.get("llmApiKey") ?? ""),
+    llmModel: String(data.get("llmModel") ?? ""),
+    llmTimeoutSeconds: String(data.get("llmTimeoutSeconds") ?? ""),
+    llmTemperature: String(data.get("llmTemperature") ?? ""),
+    codeLlmProvider: String(data.get("codeLlmProvider") ?? ""),
+    codeLlmBaseUrl: String(data.get("codeLlmBaseUrl") ?? ""),
+    codeLlmApiKey: String(data.get("codeLlmApiKey") ?? ""),
+    codeLlmModel: String(data.get("codeLlmModel") ?? ""),
+    codeLlmTimeoutSeconds: String(data.get("codeLlmTimeoutSeconds") ?? ""),
+    codeLlmTemperature: String(data.get("codeLlmTemperature") ?? ""),
   };
 }
 

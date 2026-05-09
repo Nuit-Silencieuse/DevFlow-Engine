@@ -4,10 +4,13 @@ import com.devflow.engine.workflow.CheckpointDecision;
 import com.devflow.engine.workflow.CheckpointSignal;
 import com.devflow.engine.workflow.DevFlowWorkflow;
 import com.devflow.engine.workflow.DevFlowWorkflowInput;
+import com.devflow.engine.workflow.LlmConfigSignal;
 import com.devflow.engine.workflow.WorkflowStatusSnapshot;
 import io.temporal.client.WorkflowNotFoundException;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,6 +53,12 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
     }
 
     @Override
+    public void updateLlmConfig(String workflowId, UUID pipelineId, Object llmConfig) {
+        DevFlowWorkflow workflow = workflowClient.newWorkflowStub(DevFlowWorkflow.class, workflowId);
+        workflow.updateLlmConfig(new LlmConfigSignal(pipelineId, copyMap(llmConfig)));
+    }
+
+    @Override
     public Optional<WorkflowStatusSnapshot> getStatus(String workflowId) {
         /*
          * 控制平面自身持有数据库快照，但真正的阶段执行结果首先产生在 Temporal Workflow 中。
@@ -89,5 +98,14 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
             return "pipeline";
         }
         return value.length() <= 40 ? value : value.substring(0, 40);
+    }
+
+    private static Map<String, Object> copyMap(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
     }
 }

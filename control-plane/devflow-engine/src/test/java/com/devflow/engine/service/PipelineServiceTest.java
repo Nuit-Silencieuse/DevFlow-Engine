@@ -36,6 +36,9 @@ class PipelineServiceTest {
     @Mock
     private TemporalPipelineGateway temporalPipelineGateway;
 
+    @Mock
+    private LlmCredentialService credentialService;
+
     @InjectMocks
     private PipelineService pipelineService;
 
@@ -57,7 +60,8 @@ class PipelineServiceTest {
                 65_536L,
                 25,
                 "standard"
-            )
+            ),
+            null
         ));
 
         ArgumentCaptor<Pipeline> pipelineCaptor = ArgumentCaptor.forClass(Pipeline.class);
@@ -86,6 +90,7 @@ class PipelineServiceTest {
         assertThat(saved.getStages().get(1).isRequiresHumanApproval()).isTrue();
         assertThat(PipelineService.createStage("CODE_GENERATION").isRequiresHumanApproval()).isTrue();
         assertThat(PipelineService.createStage("TEST_GENERATION").isRequiresHumanApproval()).isTrue();
+        assertThat(PipelineService.createStage("CODE_REVIEW").isRequiresHumanApproval()).isTrue();
         assertThat(PipelineService.createStage("APPLY_AND_RUN_TESTS").isRequiresHumanApproval()).isFalse();
 
         DevFlowWorkflowInput workflowInput = workflowInputCaptor.getValue();
@@ -93,6 +98,47 @@ class PipelineServiceTest {
         assertThat(workflowInput.stages()).containsExactly("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN", "CODE_GENERATION");
         assertThat(repositoryMap(workflowInput.globalContext().get("repository")))
             .containsEntry("rootPath", "D:/projects/demo-app");
+    }
+
+    @Test
+    void createPipelineDefaultsIncludeCodeReviewAsHumanCheckpoint() {
+        when(pipelineRepository.save(any(Pipeline.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        pipelineService.createPipeline(new CreatePipelineRequest(
+            "Default stages",
+            "生成代码并评审",
+            List.of(),
+            null,
+            null
+        ));
+
+        ArgumentCaptor<Pipeline> pipelineCaptor = ArgumentCaptor.forClass(Pipeline.class);
+        ArgumentCaptor<DevFlowWorkflowInput> workflowInputCaptor = ArgumentCaptor.forClass(DevFlowWorkflowInput.class);
+        verify(pipelineRepository).save(pipelineCaptor.capture());
+        verify(temporalPipelineGateway).startPipeline(workflowInputCaptor.capture());
+
+        Pipeline saved = pipelineCaptor.getValue();
+        assertThat(saved.getStages()).extracting("name").containsExactly(
+            "REQUIREMENT_ANALYSIS",
+            "SYSTEM_DESIGN",
+            "CODE_GENERATION",
+            "TEST_GENERATION",
+            "APPLY_AND_RUN_TESTS",
+            "CODE_REVIEW"
+        );
+        assertThat(saved.getStages().stream()
+            .filter(stage -> "CODE_REVIEW".equals(stage.getName()))
+            .findFirst()
+            .orElseThrow()
+            .isRequiresHumanApproval()).isTrue();
+        assertThat(workflowInputCaptor.getValue().stages()).containsExactly(
+            "REQUIREMENT_ANALYSIS",
+            "SYSTEM_DESIGN",
+            "CODE_GENERATION",
+            "TEST_GENERATION",
+            "APPLY_AND_RUN_TESTS",
+            "CODE_REVIEW"
+        );
     }
 
     @Test

@@ -6,6 +6,7 @@ public record CreatePipelineRequest(
     String name,
     String requirement,
     List<String> stages,
-    RepositoryContext repository
+    RepositoryContext repository,
+    LlmRuntimeConfig llmConfig
 ) {
 }

@@ -3,6 +3,10 @@ import type {
   CheckpointDecisionResponse,
   CreatePipelineRequest,
   CreatePipelineResponse,
+  LlmCredentialResponse,
+  LlmProviderConfig,
+  LlmRuntimeConfig,
+  LlmConfigTestResponse,
   PipelineSummaryResponse,
   PipelineStatusResponse,
   StageArtifactResponse,
@@ -61,6 +65,27 @@ export class PipelineApiClient {
         body: JSON.stringify({ decision, feedback }),
       },
     );
+  }
+
+  createLlmCredential(provider: string, apiKey: string): Promise<LlmCredentialResponse> {
+    return this.request<LlmCredentialResponse>("/llm/credentials", {
+      method: "POST",
+      body: JSON.stringify({ provider, apiKey }),
+    });
+  }
+
+  testLlmConfig(config: LlmProviderConfig): Promise<LlmConfigTestResponse> {
+    return this.request<LlmConfigTestResponse>("/llm/test", {
+      method: "POST",
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  updatePipelineLlmConfig(pipelineId: string, llmConfig: LlmRuntimeConfig): Promise<LlmRuntimeConfig> {
+    return this.request<LlmRuntimeConfig>(`/pipelines/${encodeURIComponent(pipelineId)}/llm-config`, {
+      method: "PATCH",
+      body: JSON.stringify(llmConfig),
+    });
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {

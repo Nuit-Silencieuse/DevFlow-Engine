@@ -16,6 +16,9 @@ public interface DevFlowWorkflow {
     @SignalMethod
     void rejectCheckpoint(CheckpointSignal signal);
 
+    @SignalMethod
+    void updateLlmConfig(LlmConfigSignal signal);
+
     @QueryMethod
     WorkflowStatusSnapshot getStatus();
 }

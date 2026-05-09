@@ -12,6 +12,7 @@ from src.workers.activities import (
     _state_from_request,
     _output_payload_for_stage,
     concise_activity_error,
+    select_stage_llm_config,
 )
 from src.workers.worker import TASK_QUEUE
 
@@ -132,6 +133,39 @@ class TemporalWorkerActivitiesTest(unittest.TestCase):
         self.assertIn("outputPayload", result)
         self.assertIn("structured_prd", result["outputPayload"])
         self.assertIn("code_context", result["outputPayload"])
+
+    def test_state_selects_stage_llm_runtime_config(self):
+        state = _state_from_request(
+            {
+                "pipelineId": "00000000-0000-0000-0000-000000000001",
+                "stageName": "CODE_GENERATION",
+                "requirement": "generate code",
+                "globalContext": {
+                    "llm_config": {
+                        "default": {
+                            "provider": "openai_compatible",
+                            "model": "general-model",
+                            "timeoutSeconds": 120,
+                        },
+                        "stageOverrides": {
+                            "CODE_GENERATION": {
+                                "model": "coder-model",
+                                "timeoutSeconds": 360,
+                            }
+                        },
+                    }
+                },
+                "previousOutput": {},
+            }
+        )
+
+        self.assertEqual(state["llm_runtime_config"]["provider"], "openai_compatible")
+        self.assertEqual(state["llm_runtime_config"]["model"], "coder-model")
+        self.assertEqual(state["llm_runtime_config"]["timeoutSeconds"], 360)
+        self.assertEqual(
+            select_stage_llm_config(state["llm_config"], "SYSTEM_DESIGN")["model"],
+            "general-model",
+        )
 
     def test_design_activity_returns_design_doc_and_pipeline_context(self):
         with patch("src.graph.flow.DesignAgent", StubDesignAgent):

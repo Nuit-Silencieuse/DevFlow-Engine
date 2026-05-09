@@ -14,6 +14,7 @@ from src.agents import (
     ReviewAgent,
     TestAgent,
 )
+from src.llm import LlmClient, LlmClientConfig
 from .state import DevFlowState
 
 
@@ -39,19 +40,19 @@ STAGE_ORDER = [
 
 
 def analyze_requirement_node(state: DevFlowState) -> DevFlowState:
-    return RequirementAgent().run(state)
+    return instantiate_agent(RequirementAgent, state).run(state)
 
 
 def design_system_node(state: DevFlowState) -> DevFlowState:
-    return DesignAgent().run(state)
+    return instantiate_agent(DesignAgent, state).run(state)
 
 
 def generate_code_node(state: DevFlowState) -> DevFlowState:
-    return CoderAgent().run(state)
+    return instantiate_agent(CoderAgent, state).run(state)
 
 
 def generate_tests_node(state: DevFlowState) -> DevFlowState:
-    return TestAgent().run(state)
+    return instantiate_agent(TestAgent, state).run(state)
 
 
 def apply_and_run_tests_node(state: DevFlowState) -> DevFlowState:
@@ -59,11 +60,22 @@ def apply_and_run_tests_node(state: DevFlowState) -> DevFlowState:
 
 
 def review_code_node(state: DevFlowState) -> DevFlowState:
-    return ReviewAgent().run(state)
+    return instantiate_agent(ReviewAgent, state).run(state)
 
 
 def integrate_delivery_node(state: DevFlowState) -> DevFlowState:
-    return DeliveryAgent().run(state)
+    return instantiate_agent(DeliveryAgent, state).run(state)
+
+
+def instantiate_agent(agent_class: Any, state: DevFlowState) -> Any:
+    runtime_config = state.get("llm_runtime_config")
+    if not isinstance(runtime_config, dict) or not runtime_config:
+        return agent_class()
+    client = LlmClient(config=LlmClientConfig.from_sources().with_runtime_overrides(runtime_config))
+    try:
+        return agent_class(llm_client=client)
+    except TypeError:
+        return agent_class()
 
 
 STAGE_NODES: dict[str, GraphNode] = {

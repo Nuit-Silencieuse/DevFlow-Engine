@@ -6,6 +6,7 @@
   ExplorationStep,
   PipelineStatusResponse,
   RepositoryContext,
+  LlmRuntimeConfig,
   SkippedPath,
   StageStatusResponse,
 } from "./types";
@@ -39,6 +40,18 @@ export interface PipelineFormValues {
   targetFiles: string;
   maxFiles: string;
   maxBytes: string;
+  llmProvider: string;
+  llmBaseUrl: string;
+  llmApiKey: string;
+  llmModel: string;
+  llmTimeoutSeconds: string;
+  llmTemperature: string;
+  codeLlmProvider: string;
+  codeLlmBaseUrl: string;
+  codeLlmApiKey: string;
+  codeLlmModel: string;
+  codeLlmTimeoutSeconds: string;
+  codeLlmTemperature: string;
 }
 
 export function buildCreatePipelineRequest(values: PipelineFormValues): CreatePipelineRequest {
@@ -52,7 +65,53 @@ export function buildCreatePipelineRequest(values: PipelineFormValues): CreatePi
   if (repository) {
     request.repository = repository;
   }
+  const llmConfig = buildLlmRuntimeConfig(values);
+  if (llmConfig) {
+    request.llmConfig = llmConfig;
+  }
   return request;
+}
+
+export function buildLlmRuntimeConfig(values: PipelineFormValues): LlmRuntimeConfig | undefined {
+  const defaultConfig = compactLlmProviderConfig({
+    provider: values.llmProvider,
+    baseUrl: values.llmBaseUrl,
+    apiKey: values.llmApiKey,
+    model: values.llmModel,
+    timeoutSeconds: parseOptionalPositiveInteger(values.llmTimeoutSeconds),
+    temperature: parseOptionalFloat(values.llmTemperature),
+  });
+  const codeConfig = compactLlmProviderConfig({
+    provider: values.codeLlmProvider,
+    baseUrl: values.codeLlmBaseUrl,
+    apiKey: values.codeLlmApiKey,
+    model: values.codeLlmModel,
+    timeoutSeconds: parseOptionalPositiveInteger(values.codeLlmTimeoutSeconds),
+    temperature: parseOptionalFloat(values.codeLlmTemperature),
+  });
+  const stageOverrides: Record<string, NonNullable<LlmRuntimeConfig["defaultConfig"]>> = {};
+  if (codeConfig) {
+    stageOverrides.CODE_GENERATION = codeConfig;
+  }
+  if (!defaultConfig && Object.keys(stageOverrides).length === 0) {
+    return undefined;
+  }
+  return {
+    ...(defaultConfig ? { defaultConfig } : {}),
+    ...(Object.keys(stageOverrides).length > 0 ? { stageOverrides } : {}),
+  };
+}
+
+function compactLlmProviderConfig(config: NonNullable<LlmRuntimeConfig["defaultConfig"]>): NonNullable<LlmRuntimeConfig["defaultConfig"]> | undefined {
+  const result: NonNullable<LlmRuntimeConfig["defaultConfig"]> = {};
+  if (config.provider?.trim()) result.provider = config.provider.trim();
+  if (config.baseUrl?.trim()) result.baseUrl = config.baseUrl.trim();
+  if (config.apiKey?.trim()) result.apiKey = config.apiKey.trim();
+  if (config.credentialId?.trim()) result.credentialId = config.credentialId.trim();
+  if (config.model?.trim()) result.model = config.model.trim();
+  if (config.timeoutSeconds && config.timeoutSeconds > 0) result.timeoutSeconds = config.timeoutSeconds;
+  if (config.temperature !== undefined && Number.isFinite(config.temperature)) result.temperature = config.temperature;
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 export function buildRepositoryContext(values: PipelineFormValues): RepositoryContext | undefined {
@@ -158,6 +217,16 @@ export interface DisplayField {
 export interface DisplaySection {
   title: string;
   items: DisplayField[][];
+}
+
+function parseOptionalPositiveInteger(value: string): number | undefined {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseOptionalFloat(value: string): number | undefined {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export interface AgentTraceEventViewModel {
@@ -287,10 +356,14 @@ function selectCoreArtifact(stage: StageStatusResponse): { key: string; value: u
 
 function buildRequirementArtifact(sourceKey: string, value: unknown): StageArtifactViewModel {
   const record = asRecord(value);
+  const agentTrace = record.agent_trace ?? record.agentTrace;
+  const recordForDisplay: Record<string, unknown> = { ...record };
+  delete recordForDisplay.agent_trace;
+  delete recordForDisplay.agentTrace;
   return {
     title: "结构化需求 PRD",
     sourceKey,
-    description: "只展示需求分析阶段产出的 structured_prd，隐藏代码上下文和探索轨迹等调试字段。",
+    description: "展示需求分析阶段产出的 structured_prd；运行诊断以折叠区域单独展示，避免干扰 PRD 审阅。",
     summaryFields: compactFields([
       ["需求摘要", record.summary],
       ["问题陈述", record.problem_statement],
@@ -305,7 +378,8 @@ function buildRequirementArtifact(sourceKey: string, value: unknown): StageArtif
       objectListSection("非功能需求", record.non_functional_requirements),
       objectListSection("证据摘要", record.evidence),
     ]),
-    raw: value,
+    agentTrace: buildAgentTraceViewModel(agentTrace),
+    raw: recordForDisplay,
   };
 }
 

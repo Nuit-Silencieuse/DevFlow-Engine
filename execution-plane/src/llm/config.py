@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
@@ -211,6 +213,52 @@ class LlmClientConfig:
             default_model=model or self.default_model,
         )
 
+    def with_runtime_overrides(
+        self,
+        runtime_config: Mapping[str, Any] | None,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> "LlmClientConfig":
+        """合并流水线运行时传入的模型配置。
+
+        这个配置来自控制平面 `llm_config`，通常只包含 provider/baseUrl/model/
+        credentialId 等非持久化 Secret 引用。API Key 不会进入 Temporal payload；
+        当存在 credentialId 时，执行平面在 Activity 开始时再向控制平面解析一次。
+        """
+
+        if not isinstance(runtime_config, Mapping) or not runtime_config:
+            return self
+        source = os.environ if env is None else env
+        provider = empty_to_none(get_any(runtime_config, "provider", "defaultProvider"))
+        model = empty_to_none(get_any(runtime_config, "model", "defaultModel"))
+        base_url = empty_to_none(get_any(runtime_config, "baseUrl", "base_url"))
+        api_key = empty_to_none(get_any(runtime_config, "apiKey", "api_key"))
+        credential_id = empty_to_none(get_any(runtime_config, "credentialId", "credential_id"))
+        if credential_id and not api_key:
+            api_key = resolve_runtime_credential_api_key(credential_id, source)
+        timeout = parse_float(get_any(runtime_config, "timeoutSeconds", "timeout_seconds"), self.timeout_seconds)
+        temperature = parse_float(get_any(runtime_config, "temperature"), self.temperature)
+
+        provider_name = provider or self.default_provider
+        provider_settings = merge_provider_settings(
+            self.provider_settings,
+            {
+                provider_name: {
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "default_model": model,
+                }
+            },
+        )
+        return replace(
+            self,
+            default_provider=provider_name,
+            default_model=model or self.default_model,
+            timeout_seconds=timeout,
+            temperature=temperature,
+            provider_settings=provider_settings,
+        )
+
     def settings_for(self, provider_name: str) -> dict[str, Any]:
         return dict(self.provider_settings.get(provider_name, {}))
 
@@ -330,6 +378,19 @@ def merge_task_timeouts(
         if timeout > 0:
             merged[normalize_task_name(task_name)] = float(timeout)
     return merged
+
+
+def resolve_runtime_credential_api_key(credential_id: str, env: Mapping[str, str]) -> str | None:
+    base_url = empty_to_none(env.get("DEVFLOW_CONTROL_PLANE_BASE_URL"))
+    if not base_url:
+        return None
+    url = base_url.rstrip("/") + f"/api/v1/llm/credentials/{credential_id}/secret"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return None
+    return empty_to_none(payload.get("apiKey") or payload.get("api_key"))
 
 
 def resolve_env_file(

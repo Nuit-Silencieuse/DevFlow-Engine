@@ -11,6 +11,8 @@ public interface TemporalPipelineGateway {
 
     void signalCheckpoint(String workflowId, UUID pipelineId, String stageName, CheckpointDecision decision, String feedback);
 
+    void updateLlmConfig(String workflowId, UUID pipelineId, Object llmConfig);
+
     /*
      * WorkflowStatusSnapshot 是控制平面把 Temporal 内部执行进度转换为数据库快照的桥。
      *

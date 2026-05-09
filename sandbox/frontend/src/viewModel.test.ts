@@ -23,6 +23,18 @@ function testBuildCreateRequestOmitsEmptyRepository(): void {
     targetFiles: "",
     maxFiles: "",
     maxBytes: "",
+    llmProvider: "",
+    llmBaseUrl: "",
+    llmApiKey: "",
+    llmModel: "",
+    llmTimeoutSeconds: "",
+    llmTemperature: "",
+    codeLlmProvider: "",
+    codeLlmBaseUrl: "",
+    codeLlmApiKey: "",
+    codeLlmModel: "",
+    codeLlmTimeoutSeconds: "",
+    codeLlmTemperature: "",
   });
 
   assert.equal(request.name, "新需求");
@@ -49,6 +61,18 @@ function testBuildCreateRequestNormalizesRepositoryContext(): void {
     targetFiles: "src/App.tsx",
     maxFiles: "50",
     maxBytes: "65536",
+    llmProvider: "openai_compatible",
+    llmBaseUrl: "https://api.example/v1",
+    llmApiKey: "sk-test",
+    llmModel: "general-model",
+    llmTimeoutSeconds: "240",
+    llmTemperature: "0",
+    codeLlmProvider: "openai_compatible",
+    codeLlmBaseUrl: "https://api.example/v1",
+    codeLlmApiKey: "",
+    codeLlmModel: "coder-model",
+    codeLlmTimeoutSeconds: "360",
+    codeLlmTemperature: "0",
   });
 
   assert.deepEqual(request.repository, {
@@ -59,6 +83,10 @@ function testBuildCreateRequestNormalizesRepositoryContext(): void {
     maxFiles: 50,
     maxBytes: 65_536,
   });
+  assert.equal(request.llmConfig?.defaultConfig?.model, "general-model");
+  assert.equal(request.llmConfig?.defaultConfig?.apiKey, "sk-test");
+  assert.equal(request.llmConfig?.stageOverrides?.CODE_GENERATION.model, "coder-model");
+  assert.equal(request.llmConfig?.stageOverrides?.CODE_GENERATION.timeoutSeconds, 360);
 }
 
 function testSelectReviewStagePrefersCurrentStage(): void {
@@ -143,6 +171,17 @@ function testBuildRequirementArtifactShowsOnlyStructuredPrd(): void {
         problem_statement: "当前代码生成阶段仍是占位逻辑",
         user_stories: [{ id: "US1", description: "用户可以生成 diff" }],
         acceptance_criteria: [{ id: "AC1", description: "输出 diff_patch", verification: "检查阶段产物" }],
+        agent_trace: {
+          enabled: true,
+          trace_file: "execution-plane/logs/agent-trace-requirement.jsonl",
+          recent_events: [
+            {
+              timestamp: "2026-05-09T00:00:00Z",
+              type: "agent.node.end",
+              payload: { stage: "REQUIREMENT_ANALYSIS", node: "draft_prd", durationMs: 120000 },
+            },
+          ],
+        },
       },
       codeContext: {
         inspectedFiles: ["execution-plane/src/graph/flow.py"],
@@ -153,7 +192,10 @@ function testBuildRequirementArtifactShowsOnlyStructuredPrd(): void {
   assert.equal(view?.sourceKey, "structured_prd");
   assert.equal(view?.summaryFields[0]?.value, "实现代码生成 Agent");
   assert.equal(view?.sections.some((section) => section.title === "用户故事"), true);
+  assert.equal(view?.agentTrace?.traceFile, "execution-plane/logs/agent-trace-requirement.jsonl");
+  assert.equal(view?.agentTrace?.recentEvents[0].type, "agent.node.end");
   assert.equal(JSON.stringify(view).includes("inspectedFiles"), false);
+  assert.equal(JSON.stringify(view).includes("enabled"), false);
 }
 
 function testBuildDesignArtifactShowsOnlyDesignDoc(): void {

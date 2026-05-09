@@ -82,6 +82,7 @@ def _execute_stage(stage_name: str, request: StageExecutionRequest) -> StageExec
                 "stage": stage_name,
                 "pipelineId": request.get("pipelineId") or request.get("pipeline_id"),
                 "previousOutputKeys": list((request.get("previousOutput") or {}).keys()),
+                "hasLlmConfig": bool((request.get("globalContext") or {}).get("llm_config")),
             },
         )
         state = _state_from_request(request)
@@ -157,6 +158,11 @@ def _state_from_request(request: StageExecutionRequest) -> DevFlowState:
     if repository_context:
         state["repository_context"] = repository_context
 
+    llm_config = global_context.get("llm_config")
+    if llm_config:
+        state["llm_config"] = llm_config
+        state["llm_runtime_config"] = select_stage_llm_config(llm_config, str(request.get("stageName") or request.get("stage_name") or ""))
+
     feedback = global_context.get("human_feedback")
     if feedback:
         state["human_feedback"] = str(feedback)
@@ -180,9 +186,26 @@ def _merge_known_state(state: DevFlowState, payload: dict[str, Any]) -> None:
         "code_context",
         "current_step",
         "error_logs",
+        "llm_config",
+        "llm_runtime_config",
     ):
         if key in payload:
             state[key] = payload[key]  # type: ignore[literal-required]
+
+
+def select_stage_llm_config(value: Any, stage_name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    selected: dict[str, Any] = {}
+    default_config = value.get("default") or value.get("defaultConfig")
+    if isinstance(default_config, dict):
+        selected.update(default_config)
+    stage_overrides = value.get("stageOverrides") or value.get("stage_overrides") or {}
+    if isinstance(stage_overrides, dict):
+        override = stage_overrides.get(stage_name) or stage_overrides.get(stage_name.upper())
+        if isinstance(override, dict):
+            selected.update({key: item for key, item in override.items() if item not in (None, "")})
+    return selected
 
 
 def _output_payload_for_stage(stage_name: str, state: DevFlowState) -> dict[str, Any]:

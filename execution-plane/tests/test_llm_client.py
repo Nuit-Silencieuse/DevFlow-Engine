@@ -71,6 +71,31 @@ class LlmClientTest(unittest.TestCase):
         self.assertEqual(first["provider"], "first")
         self.assertEqual(second["provider"], "second")
 
+    def test_runtime_overrides_select_model_provider_and_timeout(self):
+        config = LlmClientConfig(
+            default_provider="first",
+            default_model="base-model",
+            timeout_seconds=60,
+            max_retries=0,
+            provider_settings={"second": {"base_url": "https://old.example", "default_model": "old"}},
+        ).with_runtime_overrides(
+            {
+                "provider": "second",
+                "baseUrl": "https://runtime.example/v1",
+                "apiKey": "sk-runtime",
+                "model": "coder-model",
+                "timeoutSeconds": 360,
+                "temperature": 0,
+            }
+        )
+
+        self.assertEqual(config.default_provider, "second")
+        self.assertEqual(config.default_model, "coder-model")
+        self.assertEqual(config.timeout_for_task("code_generation"), 360)
+        self.assertEqual(config.temperature, 0)
+        self.assertEqual(config.settings_for("second")["api_key"], "sk-runtime")
+        self.assertEqual(config.settings_for("second")["base_url"], "https://runtime.example/v1")
+
     def test_markdown_json_block_is_extracted(self):
         client = LlmClient(
             config=LlmClientConfig(default_provider="fake", max_retries=0),

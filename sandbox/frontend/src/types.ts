@@ -26,6 +26,35 @@ export interface CreatePipelineRequest {
   requirement: string;
   stages: string[];
   repository?: RepositoryContext;
+  llmConfig?: LlmRuntimeConfig;
+}
+
+export interface LlmProviderConfig {
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  credentialId?: string;
+  model?: string;
+  timeoutSeconds?: number;
+  temperature?: number;
+}
+
+export interface LlmRuntimeConfig {
+  defaultConfig?: LlmProviderConfig;
+  stageOverrides?: Record<string, LlmProviderConfig>;
+}
+
+export interface LlmCredentialResponse {
+  credentialId: string;
+  provider: string;
+  maskedApiKey: string;
+}
+
+export interface LlmConfigTestResponse {
+  status: string;
+  message: string;
+  provider: string;
+  model: string;
 }
 
 export interface CreatePipelineResponse {

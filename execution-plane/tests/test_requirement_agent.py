@@ -427,6 +427,76 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertEqual(result["code_context"]["exploration_trace"], result["exploration_trace"])
         self.assertEqual(result["codeContext"]["explorationTrace"], result["exploration_trace"])
 
+    def test_agent_trace_records_requirement_nodes_tools_and_llm(self):
+        from src.agents.requirement_agent import RequirementAgent
+
+        fixture_root = Path(__file__).resolve().parent / "fixtures" / "progressive_repo"
+        trace_dir = Path(__file__).resolve().parents[1] / ".test_tmp"
+        trace_dir.mkdir(exist_ok=True)
+        trace_path = trace_dir / "requirement-agent-node-trace.jsonl"
+        if trace_path.exists():
+            trace_path.unlink()
+
+        with patch.dict(
+            os.environ,
+            {
+                "DEVFLOW_AGENT_TRACE": "1",
+                "DEVFLOW_AGENT_TRACE_STDOUT": "0",
+                "DEVFLOW_AGENT_TRACE_FILE": str(trace_path),
+            },
+            clear=False,
+        ):
+            result = RequirementAgent(
+                llm_client=fake_llm_client(
+                    {
+                        "summary": "health page",
+                        "user_stories": [
+                            {"role": "tester", "goal": "see health", "benefit": "verify worker"}
+                        ],
+                        "acceptance_criteria": [
+                            {"id": "AC-1", "description": "show health", "verification": "inspect context"},
+                            {"id": "AC-2", "description": "show worker", "verification": "inspect context"},
+                        ],
+                    }
+                )
+            ).run(
+                {
+                    "pipeline_id": "requirement-agent-trace-test",
+                    "original_requirement": "Health check should show Temporal worker status.",
+                    "repository_context": {"rootPath": str(fixture_root)},
+                }
+            )
+
+        diagnostics = result["structured_prd"]["agent_trace"]
+        self.assertTrue(diagnostics["enabled"])
+        self.assertEqual(diagnostics["trace_file"], str(trace_path))
+        events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        event_types = [event["type"] for event in events]
+        self.assertIn("agent.node.start", event_types)
+        self.assertIn("agent.node.end", event_types)
+        self.assertIn("agent.tool.start", event_types)
+        self.assertIn("agent.tool.end", event_types)
+        self.assertIn("agent.llm.start", event_types)
+        self.assertIn("agent.llm.end", event_types)
+        self.assertIn("agent.end", event_types)
+
+        tool_names = [
+            event["payload"].get("tool")
+            for event in events
+            if event["type"] == "agent.tool.end"
+        ]
+        self.assertIn("inspect_compact_repository_map", tool_names)
+        self.assertIn("search_text", tool_names)
+        self.assertIn("read_file_range", tool_names)
+
+        llm_tasks = [
+            event["payload"].get("task")
+            for event in events
+            if event["type"] == "agent.llm.start"
+        ]
+        self.assertIn("progressive_context_exploration_plan", llm_tasks)
+        self.assertIn("requirement_analysis", llm_tasks)
+
     def test_progressive_exploration_reads_ranked_ranges_not_all_candidates(self):
         from src.agents.requirement_agent import RequirementAgent
 
