@@ -230,7 +230,6 @@ class RequirementAgent:
                 "edge_cases",
                 "non_functional_requirements",
                 "open_questions",
-                "evidence",
             ],
             "strategy": "task_first_decomposition",
         }
@@ -705,6 +704,21 @@ def build_messages(state: RequirementAgentState) -> tuple[LlmMessage, ...]:
             "edge_cases": 3,
             "domain_terms": 3,
             "non_functional_requirements_per_category": 1,
+        },
+        "output_limits": {
+            "summary_max_chars": 180,
+            "problem_statement_max_chars": 360,
+            "scope_item_max_chars": 120,
+            "user_story_field_max_chars": 120,
+            "acceptance_criterion_field_max_chars": 180,
+            "edge_case_max_chars": 180,
+            "non_functional_requirement_max_chars": 180,
+            "evidence_policy": (
+                "Return evidence as an empty object {} or omit it. "
+                "The runtime will fill inspected_files and search_queries from repository_context after parsing. "
+                "Do not list file paths, source excerpts, markdown snippets, or code in evidence."
+            ),
+            "open_questions_max_items": 3,
         },
     }
     return (
@@ -1702,12 +1716,12 @@ def summarize_context_for_prompt(context_pack: dict[str, Any]) -> dict[str, Any]
     # Prompt 中只放文件片段摘要，完整文件内容不进入最终 PRD。这样既给 LLM 足够
     # 证据，又避免阶段产物膨胀或泄露大量源码。
     files = []
-    for file in context_pack.get("files", [])[:6]:
+    for file in context_pack.get("files", [])[:4]:
         content = str(file.get("content", ""))
         files.append(
             {
                 "path": file.get("path", ""),
-                "excerpt": content[:1500],
+                "excerpt": content[:800],
                 "truncated": bool(file.get("truncated")),
             }
         )
@@ -1715,10 +1729,26 @@ def summarize_context_for_prompt(context_pack: dict[str, Any]) -> dict[str, Any]
         "root_path": context_pack.get("root_path", ""),
         "inspected_files": context_pack.get("inspected_files", []),
         "search_queries": context_pack.get("search_queries", []),
-        "evidence": context_pack.get("evidence", []),
+        "evidence": lightweight_evidence_references(context_pack.get("evidence", [])),
         "open_questions": context_pack.get("open_questions", []),
         "files": files,
     }
+
+
+def lightweight_evidence_references(items: Any) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        references.append(
+            {
+                "file_path": item.get("file_path") or item.get("filePath") or "",
+                "line_start": item.get("line_start") or item.get("lineStart"),
+                "line_end": item.get("line_end") or item.get("lineEnd"),
+                "supports": list(item.get("supports") or [])[:4],
+            }
+        )
+    return references
 
 
 def extract_search_queries(requirement_text: str) -> tuple[str, ...]:
@@ -1832,7 +1862,6 @@ def evidence_item_to_mapping(item: EvidenceItem) -> dict[str, Any]:
         "line_end": item.line_end,
         "symbolName": item.symbol_name,
         "symbol_name": item.symbol_name,
-        "excerpt": item.excerpt,
         "relevanceReason": item.relevance_reason,
         "relevance_reason": item.relevance_reason,
         "supports": list(item.supports),
@@ -1938,41 +1967,75 @@ REQUIREMENT_PRD_SCHEMA = {
     "type": "object",
     "required": ["summary", "user_stories", "acceptance_criteria", "open_questions"],
     "properties": {
-        "summary": {"type": "string"},
-        "problem_statement": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 180},
+        "problem_statement": {"type": "string", "maxLength": 360},
         "scope": {"type": "object"},
         "user_stories": {
             "type": "array",
             "minItems": 3,
+            "maxItems": 4,
             "items": {
                 "type": "object",
                 "required": ["role", "goal", "benefit"],
                 "properties": {
-                    "role": {"type": "string"},
-                    "goal": {"type": "string"},
-                    "benefit": {"type": "string"},
+                    "role": {"type": "string", "maxLength": 120},
+                    "goal": {"type": "string", "maxLength": 120},
+                    "benefit": {"type": "string", "maxLength": 120},
                 },
             },
         },
         "acceptance_criteria": {
             "type": "array",
             "minItems": 5,
+            "maxItems": 6,
             "items": {
                 "type": "object",
                 "required": ["id", "description", "verification"],
                 "properties": {
                     "id": {"type": "string"},
-                    "description": {"type": "string"},
-                    "verification": {"type": "string"},
+                    "description": {"type": "string", "maxLength": 180},
+                    "verification": {"type": "string", "maxLength": 180},
                 },
             },
         },
-        "edge_cases": {"type": "array"},
+        "edge_cases": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {"type": "string", "maxLength": 180},
+        },
         "non_functional_requirements": {"type": "object"},
-        "domain_terms": {"type": "array"},
-        "assumptions": {"type": "array"},
-        "open_questions": {"type": "array"},
-        "evidence": {"type": "object"},
+        "domain_terms": {"type": "array", "maxItems": 5},
+        "assumptions": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {"type": "string", "maxLength": 180},
+        },
+        "open_questions": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {"type": "string", "maxLength": 180},
+        },
+        "evidence": {
+            "type": "object",
+            "properties": {
+                "inspected_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 12,
+                },
+                "search_queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 12,
+                },
+                "notes": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 160},
+                    "maxItems": 6,
+                },
+            },
+            "additionalProperties": False,
+        },
         "quality": {"type": "object"},
     },
 }

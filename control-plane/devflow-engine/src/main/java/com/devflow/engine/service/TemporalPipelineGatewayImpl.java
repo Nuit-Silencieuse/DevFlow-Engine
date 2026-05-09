@@ -6,10 +6,14 @@ import com.devflow.engine.workflow.DevFlowWorkflow;
 import com.devflow.engine.workflow.DevFlowWorkflowInput;
 import com.devflow.engine.workflow.LlmConfigSignal;
 import com.devflow.engine.workflow.WorkflowStatusSnapshot;
+import io.temporal.api.common.v1.WorkflowExecution;
+import io.temporal.api.enums.v1.WorkflowExecutionStatus;
+import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest;
 import io.temporal.client.WorkflowNotFoundException;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -69,11 +73,66 @@ public class TemporalPipelineGatewayImpl implements TemporalPipelineGateway {
          * 2. 查询失败或 Workflow 尚未创建时，不影响数据库里已有快照的读取能力。
          */
         try {
+            Optional<WorkflowStatusSnapshot> terminalFailure = describeTerminalFailure(workflowId);
+            if (terminalFailure.isPresent()) {
+                return terminalFailure;
+            }
             DevFlowWorkflow workflow = workflowClient.newWorkflowStub(DevFlowWorkflow.class, workflowId);
             return Optional.ofNullable(workflow.getStatus());
         } catch (WorkflowNotFoundException ex) {
             return Optional.empty();
+        } catch (RuntimeException ex) {
+            return describeClosedWorkflow(workflowId);
         }
+    }
+
+    private Optional<WorkflowStatusSnapshot> describeTerminalFailure(String workflowId) {
+        try {
+            WorkflowExecutionStatus status = describeWorkflowStatus(workflowId);
+            if (isFailedTerminalStatus(status)) {
+                return Optional.of(new WorkflowStatusSnapshot(null, "FAILED", null, List.of()));
+            }
+            return Optional.empty();
+        } catch (WorkflowNotFoundException notFound) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<WorkflowStatusSnapshot> describeClosedWorkflow(String workflowId) {
+        try {
+            WorkflowExecutionStatus status = describeWorkflowStatus(workflowId);
+            String pipelineStatus = switch (status) {
+                case WORKFLOW_EXECUTION_STATUS_COMPLETED -> "COMPLETED";
+                case WORKFLOW_EXECUTION_STATUS_FAILED,
+                    WORKFLOW_EXECUTION_STATUS_CANCELED,
+                    WORKFLOW_EXECUTION_STATUS_TERMINATED,
+                    WORKFLOW_EXECUTION_STATUS_TIMED_OUT -> "FAILED";
+                default -> "RUNNING";
+            };
+            return Optional.of(new WorkflowStatusSnapshot(null, pipelineStatus, null, List.of()));
+        } catch (WorkflowNotFoundException notFound) {
+            return Optional.empty();
+        }
+    }
+
+    private WorkflowExecutionStatus describeWorkflowStatus(String workflowId) {
+        return workflowClient.getWorkflowServiceStubs()
+            .blockingStub()
+            .describeWorkflowExecution(DescribeWorkflowExecutionRequest.newBuilder()
+                .setNamespace(workflowClient.getOptions().getNamespace())
+                .setExecution(WorkflowExecution.newBuilder()
+                    .setWorkflowId(workflowId)
+                    .build())
+                .build())
+            .getWorkflowExecutionInfo()
+            .getStatus();
+    }
+
+    private static boolean isFailedTerminalStatus(WorkflowExecutionStatus status) {
+        return status == WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED
+            || status == WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CANCELED
+            || status == WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TERMINATED
+            || status == WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TIMED_OUT;
     }
 
     static String workflowId(UUID pipelineId, String pipelineName) {

@@ -250,6 +250,37 @@ class PipelineServiceTest {
     }
 
     @Test
+    void getPipelineMarksCurrentStageFailedWhenWorkflowExecutionFailedWithoutQuerySnapshot() {
+        UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000031");
+        Pipeline pipeline = new Pipeline("Add auth");
+        pipeline.setId(pipelineId);
+        pipeline.setStatus(PipelineStatus.RUNNING);
+        pipeline.setCurrentStage("REQUIREMENT_ANALYSIS");
+        pipeline.setGlobalContext(Map.of(
+            "requested_stages", List.of("REQUIREMENT_ANALYSIS", "SYSTEM_DESIGN")
+        ));
+        pipeline.addStage(PipelineService.createStage("REQUIREMENT_ANALYSIS"));
+        pipeline.addStage(PipelineService.createStage("SYSTEM_DESIGN"));
+        pipeline.getStages().get(0).setStatus(StageStatus.RUNNING);
+
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(temporalPipelineGateway.getStatus("devflow-Add-auth-" + pipelineId)).thenReturn(Optional.of(new WorkflowStatusSnapshot(
+            null,
+            "FAILED",
+            null,
+            List.of()
+        )));
+
+        var response = pipelineService.getPipeline(pipelineId);
+
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.currentStage()).isEqualTo("REQUIREMENT_ANALYSIS");
+        assertThat(response.stages().get(0).status()).isEqualTo("FAILED");
+        assertThat(response.stages().get(1).status()).isEqualTo("PENDING");
+        verify(pipelineRepository).save(pipeline);
+    }
+
+    @Test
     void getPipelineSummaryOmitsLargeStageOutputs() {
         UUID pipelineId = UUID.fromString("00000000-0000-0000-0000-000000000040");
         Pipeline pipeline = new Pipeline("Summary");

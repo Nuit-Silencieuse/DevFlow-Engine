@@ -295,6 +295,13 @@ def build_test_messages(state: TestAgentState) -> tuple[LlmMessage, ...]:
         "human_feedback": state.get("feedback_text", ""),
         "test_plan": state.get("test_plan", {}),
         "response_language": state.get("response_language", "same_as_requirement"),
+        "output_limits": {
+            "summary_max_chars": 240,
+            "test_files_max_items": 12,
+            "test_commands_max_items": 8,
+            "risks_max_items": 5,
+            "open_questions_max_items": 3,
+        },
     }
     return (
         LlmMessage(
@@ -328,6 +335,13 @@ def build_test_messages(state: TestAgentState) -> tuple[LlmMessage, ...]:
                 "依赖安装和测试运行要拆成两个 test_commands 条目。"
             ),
         ),
+        LlmMessage(
+            role="system",
+            content=(
+                "Keep JSON compact and follow output_limits. "
+                "Do not copy full source files, full production diff explanations, or long logs into summary, risks, or open_questions."
+            ),
+        ),
         LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
     )
 
@@ -340,11 +354,11 @@ def normalize_test_results_payload(value: dict[str, Any]) -> dict[str, Any]:
         "status": first_text(value, "status") or "GENERATED",
         "summary": first_text(value, "summary"),
         "test_diff_patch": test_diff_patch,
-        "test_files": normalize_named_items(value.get("test_files") or value.get("testFiles")),
-        "test_commands": normalize_named_items(value.get("test_commands") or value.get("testCommands")),
-        "coverage_focus": ensure_text_list(value.get("coverage_focus") or value.get("coverageFocus")),
-        "risks": ensure_text_list(value.get("risks")),
-        "open_questions": ensure_text_list(value.get("open_questions") or value.get("openQuestions")),
+        "test_files": normalize_named_items(value.get("test_files") or value.get("testFiles"))[:12],
+        "test_commands": normalize_named_items(value.get("test_commands") or value.get("testCommands"))[:8],
+        "coverage_focus": ensure_text_list(value.get("coverage_focus") or value.get("coverageFocus"))[:8],
+        "risks": ensure_text_list(value.get("risks"))[:5],
+        "open_questions": ensure_text_list(value.get("open_questions") or value.get("openQuestions"))[:3],
         "quality": dict(value.get("quality") or {}) if isinstance(value.get("quality"), dict) else {},
     }
 
@@ -386,8 +400,17 @@ def summarize_code_context(code_context: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": code_context.get("status", "SKIPPED"),
         "root_path": code_context.get("root_path", ""),
-        "inspected_files": list(code_context.get("inspected_files", [])),
-        "evidence": list(code_context.get("evidence", []))[:8],
+        "inspected_files": list(code_context.get("inspected_files", []))[:12],
+        "evidence_refs": [
+            {
+                "file_path": item.get("file_path") or item.get("filePath") or "",
+                "line_start": item.get("line_start") or item.get("lineStart"),
+                "line_end": item.get("line_end") or item.get("lineEnd"),
+                "supports": list(item.get("supports") or [])[:4],
+            }
+            for item in list(code_context.get("evidence", []))[:8]
+            if isinstance(item, dict)
+        ],
         "confidence": code_context.get("confidence", 0.0),
         "open_questions": list(code_context.get("open_questions", [])),
     }
@@ -486,26 +509,28 @@ TEST_RESULTS_SCHEMA = {
     ],
     "properties": {
         "status": {"type": "string"},
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 240},
         "test_diff_patch": {
             "type": "string",
             "description": "Unified diff text for test files only.",
         },
         "test_files": {
             "type": "array",
+            "maxItems": 12,
             "items": {
                 "type": "object",
                 "required": ["path", "framework", "purpose"],
                 "properties": {
-                    "path": {"type": "string"},
-                    "framework": {"type": "string"},
-                    "purpose": {"type": "string"},
-                    "assertions": {"type": "array", "items": {"type": "string"}},
+                    "path": {"type": "string", "maxLength": 160},
+                    "framework": {"type": "string", "maxLength": 80},
+                    "purpose": {"type": "string", "maxLength": 180},
+                    "assertions": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 160}},
                 },
             },
         },
         "test_commands": {
             "type": "array",
+            "maxItems": 8,
             "items": {
                 "type": "object",
                 "required": ["command", "purpose"],
@@ -518,14 +543,14 @@ TEST_RESULTS_SCHEMA = {
                         "type": "string",
                         "description": "Optional safe relative directory under repository root, for example demo.",
                     },
-                    "purpose": {"type": "string"},
-                    "expected_result": {"type": "string"},
+                    "purpose": {"type": "string", "maxLength": 180},
+                    "expected_result": {"type": "string", "maxLength": 180},
                 },
             },
         },
-        "coverage_focus": {"type": "array", "items": {"type": "string"}},
-        "risks": {"type": "array", "items": {"type": "string"}},
-        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "coverage_focus": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 160}},
+        "risks": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 180}},
+        "open_questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 180}},
         "quality": {"type": "object"},
     },
 }

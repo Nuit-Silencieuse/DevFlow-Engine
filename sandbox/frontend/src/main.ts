@@ -109,9 +109,7 @@ app.innerHTML = `
         <div class="path-grid">
           <label class="field">
             <span>包含路径</span>
-            <textarea name="includePaths">control-plane/devflow-engine/src/main/java
-sandbox/frontend
-specs/001-devflow-engine</textarea>
+            <textarea name="includePaths"></textarea>
           </label>
           <label class="field">
             <span>排除路径</span>
@@ -122,9 +120,7 @@ dist
           </label>
           <label class="field">
             <span>重点文件</span>
-            <textarea name="targetFiles">specs/001-devflow-engine/tasks.md
-control-plane/devflow-engine/src/main/java/com/devflow/engine/api/PipelineController.java
-sandbox/frontend/src/main.ts</textarea>
+            <textarea name="targetFiles"></textarea>
           </label>
         </div>
 
@@ -145,11 +141,15 @@ sandbox/frontend/src/main.ts</textarea>
             </label>
             <label class="field">
               <span>默认 Model</span>
-              <input name="llmModel" value="qwen3.5-plus-2026-02-15" autocomplete="off" />
+              <input name="llmModel" value="glm-5.1" autocomplete="off" />
             </label>
             <label class="field">
               <span>默认 Timeout 秒</span>
               <input name="llmTimeoutSeconds" value="240" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span>默认 Max Tokens</span>
+              <input name="llmMaxTokens" value="2200" inputmode="numeric" />
             </label>
             <label class="field">
               <span>默认 Temperature</span>
@@ -171,11 +171,15 @@ sandbox/frontend/src/main.ts</textarea>
             </label>
             <label class="field">
               <span>代码生成 Model</span>
-              <input name="codeLlmModel" placeholder="例如 qwen-coder-plus" autocomplete="off" />
+              <input name="codeLlmModel" value="glm-5.1" placeholder="例如 qwen-coder-plus" autocomplete="off" />
             </label>
             <label class="field">
               <span>代码生成 Timeout 秒</span>
               <input name="codeLlmTimeoutSeconds" value="360" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span>代码生成 Max Tokens</span>
+              <input name="codeLlmMaxTokens" value="3500" inputmode="numeric" />
             </label>
             <label class="field">
               <span>代码生成 Temperature</span>
@@ -184,6 +188,7 @@ sandbox/frontend/src/main.ts</textarea>
           </div>
           <div class="llm-action-row">
             <button id="testLlmButton" class="secondary-button" type="button">测试模型配置</button>
+            <button id="saveLlmConfigButton" class="secondary-button" type="button">保存到配置文件</button>
             <button id="updateLlmButton" class="secondary-button" type="button">更新当前流水线模型</button>
           </div>
         </details>
@@ -238,6 +243,7 @@ sandbox/frontend/src/main.ts</textarea>
 const createForm = mustGet<HTMLFormElement>("createForm");
 const createButton = mustGet<HTMLButtonElement>("createButton");
 const testLlmButton = mustGet<HTMLButtonElement>("testLlmButton");
+const saveLlmConfigButton = mustGet<HTMLButtonElement>("saveLlmConfigButton");
 const updateLlmButton = mustGet<HTMLButtonElement>("updateLlmButton");
 const refreshButton = mustGet<HTMLButtonElement>("refreshButton");
 const pipelineIdInput = mustGet<HTMLInputElement>("pipelineIdInput");
@@ -297,6 +303,16 @@ testLlmButton.addEventListener("click", () => withLoading(async () => {
   }
   const response = await api.testLlmConfig(config);
   state.message = `${response.status}: ${response.provider} / ${response.model}`;
+  render();
+}));
+
+saveLlmConfigButton.addEventListener("click", () => withLoading(async () => {
+  const llmConfig = buildLlmRuntimeConfig(readCreateForm());
+  if (!llmConfig) {
+    throw new Error("请至少填写一个模型配置字段。");
+  }
+  const response = await api.updateLlmConfigFile(llmConfig);
+  state.message = `已保存模型配置文件：${response.path}`;
   render();
 }));
 
@@ -377,12 +393,14 @@ function readCreateForm() {
     llmApiKey: String(data.get("llmApiKey") ?? ""),
     llmModel: String(data.get("llmModel") ?? ""),
     llmTimeoutSeconds: String(data.get("llmTimeoutSeconds") ?? ""),
+    llmMaxTokens: String(data.get("llmMaxTokens") ?? ""),
     llmTemperature: String(data.get("llmTemperature") ?? ""),
     codeLlmProvider: String(data.get("codeLlmProvider") ?? ""),
     codeLlmBaseUrl: String(data.get("codeLlmBaseUrl") ?? ""),
     codeLlmApiKey: String(data.get("codeLlmApiKey") ?? ""),
     codeLlmModel: String(data.get("codeLlmModel") ?? ""),
     codeLlmTimeoutSeconds: String(data.get("codeLlmTimeoutSeconds") ?? ""),
+    codeLlmMaxTokens: String(data.get("codeLlmMaxTokens") ?? ""),
     codeLlmTemperature: String(data.get("codeLlmTemperature") ?? ""),
   };
 }

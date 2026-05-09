@@ -12,6 +12,16 @@
     "code_review": 240,
     "delivery_integration": 240
   },
+  "taskMaxTokens": {
+    "progressive_context_exploration_plan": 1200,
+    "requirement_analysis": 2200,
+    "system_design": 3000,
+    "code_generation": 3500,
+    "code_generation_repair": 2500,
+    "test_generation": 3000,
+    "code_review": 2200,
+    "delivery_integration": 1800
+  },
   "maxRetries": 2,
   "jsonRepairAttempts": 1,
   "providers": {

@@ -93,6 +93,10 @@ class LlmClient:
             request.task,
             request.timeout_seconds,
         )
+        effective_max_tokens = request_config.max_tokens_for_task(
+            request.task,
+            request.max_tokens,
+        )
         self.trace_recorder.record(
             "llm.request",
             {
@@ -106,6 +110,7 @@ class LlmClient:
                 if request.temperature is not None
                 else request_config.temperature,
                 "timeout_seconds": effective_timeout_seconds,
+                "max_tokens": effective_max_tokens,
                 "metadata": request.metadata,
                 "messages": [
                     {"role": message.role, "content": message.content}
@@ -116,7 +121,11 @@ class LlmClient:
         )
         response = self._complete_with_retries(
             provider,
-            replace(request, timeout_seconds=effective_timeout_seconds),
+            replace(
+                request,
+                timeout_seconds=effective_timeout_seconds,
+                max_tokens=effective_max_tokens,
+            ),
             request_config,
         )
         if request.response_format != "json":
@@ -167,7 +176,13 @@ class LlmClient:
         while True:
             try:
                 return provider.complete(request, config)
-            except (LlmTimeoutError, LlmRateLimitError, LlmProviderError):
+            except LlmTimeoutError:
+                # Timeout means the provider already consumed the whole request budget.
+                # Retrying here multiplies wall-clock time inside one Temporal Activity;
+                # let Temporal's Activity retry policy decide whether to schedule a new
+                # attempt with the latest runtime configuration.
+                raise
+            except (LlmRateLimitError, LlmProviderError):
                 if attempt >= config.max_retries:
                     raise
                 self.sleep(min(0.1 * (2**attempt), 2.0))

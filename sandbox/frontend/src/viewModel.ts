@@ -45,12 +45,14 @@ export interface PipelineFormValues {
   llmApiKey: string;
   llmModel: string;
   llmTimeoutSeconds: string;
+  llmMaxTokens: string;
   llmTemperature: string;
   codeLlmProvider: string;
   codeLlmBaseUrl: string;
   codeLlmApiKey: string;
   codeLlmModel: string;
   codeLlmTimeoutSeconds: string;
+  codeLlmMaxTokens: string;
   codeLlmTemperature: string;
 }
 
@@ -79,6 +81,7 @@ export function buildLlmRuntimeConfig(values: PipelineFormValues): LlmRuntimeCon
     apiKey: values.llmApiKey,
     model: values.llmModel,
     timeoutSeconds: parseOptionalPositiveInteger(values.llmTimeoutSeconds),
+    maxTokens: parseOptionalPositiveInteger(values.llmMaxTokens),
     temperature: parseOptionalFloat(values.llmTemperature),
   });
   const codeConfig = compactLlmProviderConfig({
@@ -87,6 +90,7 @@ export function buildLlmRuntimeConfig(values: PipelineFormValues): LlmRuntimeCon
     apiKey: values.codeLlmApiKey,
     model: values.codeLlmModel,
     timeoutSeconds: parseOptionalPositiveInteger(values.codeLlmTimeoutSeconds),
+    maxTokens: parseOptionalPositiveInteger(values.codeLlmMaxTokens),
     temperature: parseOptionalFloat(values.codeLlmTemperature),
   });
   const stageOverrides: Record<string, NonNullable<LlmRuntimeConfig["defaultConfig"]>> = {};
@@ -110,6 +114,7 @@ function compactLlmProviderConfig(config: NonNullable<LlmRuntimeConfig["defaultC
   if (config.credentialId?.trim()) result.credentialId = config.credentialId.trim();
   if (config.model?.trim()) result.model = config.model.trim();
   if (config.timeoutSeconds && config.timeoutSeconds > 0) result.timeoutSeconds = config.timeoutSeconds;
+  if (config.maxTokens && config.maxTokens > 0) result.maxTokens = config.maxTokens;
   if (config.temperature !== undefined && Number.isFinite(config.temperature)) result.temperature = config.temperature;
   return Object.keys(result).length > 0 ? result : undefined;
 }

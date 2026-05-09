@@ -4,6 +4,7 @@ import type {
   CreatePipelineRequest,
   CreatePipelineResponse,
   LlmCredentialResponse,
+  LlmConfigFileResponse,
   LlmProviderConfig,
   LlmRuntimeConfig,
   LlmConfigTestResponse,
@@ -78,6 +79,17 @@ export class PipelineApiClient {
     return this.request<LlmConfigTestResponse>("/llm/test", {
       method: "POST",
       body: JSON.stringify({ config }),
+    });
+  }
+
+  getLlmConfigFile(): Promise<LlmConfigFileResponse> {
+    return this.request<LlmConfigFileResponse>("/llm/config-file");
+  }
+
+  updateLlmConfigFile(llmConfig: LlmRuntimeConfig): Promise<LlmConfigFileResponse> {
+    return this.request<LlmConfigFileResponse>("/llm/config-file", {
+      method: "PATCH",
+      body: JSON.stringify(llmConfig),
     });
   }
 

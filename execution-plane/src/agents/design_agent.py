@@ -300,6 +300,16 @@ def build_design_messages(state: DesignAgentState) -> tuple[LlmMessage, ...]:
         "human_feedback": state.get("feedback_text", ""),
         "design_plan": state.get("design_plan", {}),
         "response_language": state.get("response_language", "same_as_requirement"),
+        "output_limits": {
+            "summary_max_chars": 240,
+            "modules_max_items": 4,
+            "module_field_max_chars": 180,
+            "file_plan_max_items": 6,
+            "file_plan_field_max_chars": 180,
+            "risks_max_items": 4,
+            "open_questions_max_items": 3,
+            "policy": "Return compact JSON only. Do not copy source excerpts, PRD evidence, repository maps, or long markdown into design_doc.",
+        },
     }
     return (
         LlmMessage(
@@ -317,10 +327,7 @@ def build_design_messages(state: DesignAgentState) -> tuple[LlmMessage, ...]:
                 "risks 至少 3 项，必须说明可观察的失败模式或调试关注点。"
             ),
         ),
-        LlmMessage(
-            role="user",
-            content=json.dumps(payload, ensure_ascii=False),
-        ),
+        LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
     )
 
 
@@ -339,13 +346,13 @@ def normalize_design_doc(
         )
     return {
         "summary": str(draft.get("summary") or "").strip(),
-        "modules": normalize_modules(draft.get("modules")),
-        "api_contracts": normalize_named_items(draft.get("api_contracts")),
-        "data_changes": normalize_named_items(draft.get("data_changes")),
-        "file_plan": normalize_file_plan(draft.get("file_plan")),
-        "test_strategy": normalize_named_items(draft.get("test_strategy")),
-        "risks": ensure_text_list(draft.get("risks")),
-        "open_questions": open_questions,
+        "modules": normalize_modules(draft.get("modules"))[:4],
+        "api_contracts": normalize_named_items(draft.get("api_contracts"))[:4],
+        "data_changes": normalize_named_items(draft.get("data_changes"))[:4],
+        "file_plan": normalize_file_plan(draft.get("file_plan"))[:6],
+        "test_strategy": normalize_named_items(draft.get("test_strategy"))[:5],
+        "risks": ensure_text_list(draft.get("risks"))[:4],
+        "open_questions": open_questions[:3],
         "feedback": feedback_text,
         "code_context_summary": summarize_code_context(code_context),
         "prd_summary": str(structured_prd.get("summary") or "").strip(),
@@ -475,9 +482,18 @@ def summarize_code_context(code_context: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": code_context.get("status", "SKIPPED"),
         "root_path": code_context.get("root_path", ""),
-        "inspected_files": list(code_context.get("inspected_files", [])),
+        "inspected_files": list(code_context.get("inspected_files", []))[:12],
         "search_queries": list(code_context.get("search_queries", [])),
-        "evidence": list(code_context.get("evidence", []))[:8],
+        "evidence_refs": [
+            {
+                "file_path": item.get("file_path") or item.get("filePath") or "",
+                "line_start": item.get("line_start") or item.get("lineStart"),
+                "line_end": item.get("line_end") or item.get("lineEnd"),
+                "supports": list(item.get("supports") or [])[:4],
+            }
+            for item in list(code_context.get("evidence", []))[:8]
+            if isinstance(item, dict)
+        ],
         "confidence": code_context.get("confidence", 0.0),
         "open_questions": list(code_context.get("open_questions", [])),
         "notes": list(code_context.get("notes", [])),
@@ -588,44 +604,46 @@ DESIGN_DOC_SCHEMA = {
     "type": "object",
     "required": ["summary", "modules", "file_plan", "risks", "open_questions"],
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 240},
         "modules": {
             "type": "array",
             "minItems": 3,
+            "maxItems": 4,
             "items": {
                 "type": "object",
                 "required": ["name", "responsibility"],
                 "properties": {
-                    "name": {"type": "string"},
-                    "responsibility": {"type": "string"},
-                    "dependencies": {"type": "array", "items": {"type": "string"}},
-                    "key_decisions": {"type": "array", "items": {"type": "string"}},
-                    "implementation_notes": {"type": "array", "items": {"type": "string"}},
-                    "test_focus": {"type": "array", "items": {"type": "string"}},
+                    "name": {"type": "string", "maxLength": 80},
+                    "responsibility": {"type": "string", "maxLength": 180},
+                    "dependencies": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 80}},
+                    "key_decisions": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 180}},
+                    "implementation_notes": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 180}},
+                    "test_focus": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 180}},
                 },
             },
         },
-        "api_contracts": {"type": "array"},
-        "data_changes": {"type": "array"},
+        "api_contracts": {"type": "array", "maxItems": 4},
+        "data_changes": {"type": "array", "maxItems": 4},
         "file_plan": {
             "type": "array",
             "minItems": 4,
+            "maxItems": 6,
             "items": {
                 "type": "object",
                 "required": ["path", "operation", "reason"],
                 "properties": {
-                    "path": {"type": "string"},
+                    "path": {"type": "string", "maxLength": 160},
                     "operation": {"type": "string", "enum": ["create", "update", "delete"]},
-                    "reason": {"type": "string"},
-                    "change_summary": {"type": "string"},
-                    "validation": {"type": "string"},
-                    "related_modules": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string", "maxLength": 180},
+                    "change_summary": {"type": "string", "maxLength": 180},
+                    "validation": {"type": "string", "maxLength": 180},
+                    "related_modules": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 80}},
                 },
             },
         },
-        "test_strategy": {"type": "array"},
-        "risks": {"type": "array", "items": {"type": "string"}},
-        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "test_strategy": {"type": "array", "maxItems": 5},
+        "risks": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 180}},
+        "open_questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 180}},
         "quality": {"type": "object"},
     },
 }

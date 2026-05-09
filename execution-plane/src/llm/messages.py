@@ -20,6 +20,7 @@ class LlmRequest:
     model: str | None = None
     temperature: float | None = None
     timeout_seconds: float | None = None
+    max_tokens: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

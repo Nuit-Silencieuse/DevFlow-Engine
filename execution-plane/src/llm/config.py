@@ -21,6 +21,17 @@ DEFAULT_TASK_TIMEOUT_SECONDS = {
     "delivery_integration": 240.0,
 }
 
+DEFAULT_TASK_MAX_TOKENS = {
+    "progressive_context_exploration_plan": 1200,
+    "requirement_analysis": 2200,
+    "system_design": 3000,
+    "code_generation": 3500,
+    "code_generation_repair": 2500,
+    "test_generation": 3000,
+    "code_review": 2200,
+    "delivery_integration": 1800,
+}
+
 
 @dataclass(frozen=True)
 class LlmClientConfig:
@@ -32,6 +43,9 @@ class LlmClientConfig:
     json_repair_attempts: int = 1
     task_timeout_seconds: dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_TASK_TIMEOUT_SECONDS)
+    )
+    task_max_tokens: dict[str, int] = field(
+        default_factory=lambda: dict(DEFAULT_TASK_MAX_TOKENS)
     )
     provider_settings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -52,6 +66,7 @@ class LlmClientConfig:
                 1,
             ),
             task_timeout_seconds=task_timeouts_from_env(source),
+            task_max_tokens=task_max_tokens_from_env(source),
             provider_settings={
                 "openai_compatible": {
                     "api_key": empty_to_none(source.get("DEVFLOW_LLM_OPENAI_API_KEY")),
@@ -154,6 +169,9 @@ class LlmClientConfig:
             task_timeout_seconds=task_timeouts_from_mapping(
                 get_any(data, "taskTimeoutSeconds", "task_timeout_seconds")
             ),
+            task_max_tokens=task_max_tokens_from_mapping(
+                get_any(data, "taskMaxTokens", "task_max_tokens")
+            ),
             provider_settings={
                 str(provider_name): normalize_provider_settings(settings, source)
                 for provider_name, settings in providers.items()
@@ -173,6 +191,10 @@ class LlmClientConfig:
         task_timeout_seconds = merge_task_timeouts(
             self.task_timeout_seconds,
             task_timeouts_from_env(source, include_defaults=False),
+        )
+        task_max_tokens = merge_task_max_tokens(
+            self.task_max_tokens,
+            task_max_tokens_from_env(source, include_defaults=False),
         )
         return replace(
             self,
@@ -196,6 +218,7 @@ class LlmClientConfig:
                 self.json_repair_attempts,
             ),
             task_timeout_seconds=task_timeout_seconds,
+            task_max_tokens=task_max_tokens,
             provider_settings=provider_settings,
         )
 
@@ -238,6 +261,7 @@ class LlmClientConfig:
             api_key = resolve_runtime_credential_api_key(credential_id, source)
         timeout = parse_float(get_any(runtime_config, "timeoutSeconds", "timeout_seconds"), self.timeout_seconds)
         temperature = parse_float(get_any(runtime_config, "temperature"), self.temperature)
+        max_tokens = parse_int(get_any(runtime_config, "maxTokens", "max_tokens"), 0)
 
         provider_name = provider or self.default_provider
         provider_settings = merge_provider_settings(
@@ -250,12 +274,19 @@ class LlmClientConfig:
                 }
             },
         )
+        task_max_tokens = dict(self.task_max_tokens)
+        if max_tokens > 0:
+            task_name = normalize_task_name(get_any(runtime_config, "task", "stage") or "")
+            if task_name:
+                task_max_tokens[task_name] = max_tokens
+
         return replace(
             self,
             default_provider=provider_name,
             default_model=model or self.default_model,
             timeout_seconds=timeout,
             temperature=temperature,
+            task_max_tokens=task_max_tokens,
             provider_settings=provider_settings,
         )
 
@@ -272,6 +303,25 @@ class LlmClientConfig:
         if configured is None:
             configured = self.timeout_seconds
         return max(float(configured), float(self.timeout_seconds))
+
+    def max_tokens_for_task(
+        self,
+        task: str | None,
+        request_max_tokens: int | None = None,
+    ) -> int | None:
+        """Return the effective completion-token cap for a task.
+
+        The cap is intentionally task-scoped instead of global because code generation
+        needs more room than routing/planning calls, while small planning calls should
+        fail fast instead of letting the model produce long narrative output.
+        """
+
+        if request_max_tokens and request_max_tokens > 0:
+            return int(request_max_tokens)
+        configured = self.task_max_tokens.get(normalize_task_name(task))
+        if configured and configured > 0:
+            return int(configured)
+        return None
 
 
 def empty_to_none(value: Any) -> str | None:
@@ -350,6 +400,17 @@ def parse_task_timeout_map(value: Any) -> dict[str, float]:
     return result
 
 
+def parse_task_max_token_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return dict(DEFAULT_TASK_MAX_TOKENS)
+    result = dict(DEFAULT_TASK_MAX_TOKENS)
+    for key, raw_value in value.items():
+        max_tokens = parse_int(raw_value, result.get(normalize_task_name(key), 0))
+        if max_tokens > 0:
+            result[normalize_task_name(key)] = max_tokens
+    return result
+
+
 def task_timeouts_from_env(
     env: Mapping[str, str],
     include_defaults: bool = True,
@@ -369,6 +430,25 @@ def task_timeouts_from_mapping(value: Any) -> dict[str, float]:
     return parse_task_timeout_map(value)
 
 
+def task_max_tokens_from_env(
+    env: Mapping[str, str],
+    include_defaults: bool = True,
+) -> dict[str, int]:
+    result = dict(DEFAULT_TASK_MAX_TOKENS) if include_defaults else {}
+    for task_name, default_max_tokens in DEFAULT_TASK_MAX_TOKENS.items():
+        env_key = f"DEVFLOW_LLM_MAX_TOKENS_{task_name.upper()}"
+        if env_key not in env and not include_defaults:
+            continue
+        max_tokens = parse_int(env.get(env_key), default_max_tokens)
+        if max_tokens > 0:
+            result[task_name] = max_tokens
+    return result
+
+
+def task_max_tokens_from_mapping(value: Any) -> dict[str, int]:
+    return parse_task_max_token_map(value)
+
+
 def merge_task_timeouts(
     base: Mapping[str, float],
     overrides: Mapping[str, float],
@@ -377,6 +457,17 @@ def merge_task_timeouts(
     for task_name, timeout in overrides.items():
         if timeout > 0:
             merged[normalize_task_name(task_name)] = float(timeout)
+    return merged
+
+
+def merge_task_max_tokens(
+    base: Mapping[str, int],
+    overrides: Mapping[str, int],
+) -> dict[str, int]:
+    merged = dict(base)
+    for task_name, max_tokens in overrides.items():
+        if max_tokens > 0:
+            merged[normalize_task_name(task_name)] = int(max_tokens)
     return merged
 
 

@@ -305,7 +305,27 @@ public class PipelineService {
         if (snapshot.stages() != null) {
             snapshot.stages().forEach(result -> applyStageExecutionResult(pipeline, result));
         }
+        if (pipeline.getStatus() == PipelineStatus.FAILED) {
+            markCurrentStageFailedWhenNoWorkflowStageResult(pipeline, snapshot);
+        }
         pipelineRepository.save(pipeline);
+    }
+
+    private static void markCurrentStageFailedWhenNoWorkflowStageResult(Pipeline pipeline, WorkflowStatusSnapshot snapshot) {
+        boolean hasFailedStageResult = snapshot.stages() != null
+            && snapshot.stages().stream()
+                .anyMatch(result -> result != null && "FAILED".equalsIgnoreCase(String.valueOf(result.status())));
+        if (hasFailedStageResult || pipeline.getCurrentStage() == null) {
+            return;
+        }
+        pipeline.getStages().stream()
+            .filter(stage -> pipeline.getCurrentStage().equals(stage.getName()))
+            .findFirst()
+            .ifPresent(stage -> {
+                if (stage.getStatus() == StageStatus.RUNNING || stage.getStatus() == StageStatus.PENDING) {
+                    stage.setStatus(StageStatus.FAILED);
+                }
+            });
     }
 
     private static void applyStageExecutionResult(Pipeline pipeline, StageExecutionResult result) {
@@ -428,6 +448,7 @@ public class PipelineService {
         String baseUrl = trimToNull(config.baseUrl());
         String model = trimToNull(config.model());
         Integer timeout = config.timeoutSeconds() == null || config.timeoutSeconds() <= 0 ? null : config.timeoutSeconds();
+        Integer maxTokens = config.maxTokens() == null || config.maxTokens() <= 0 ? null : config.maxTokens();
         Double temperature = config.temperature();
         if (
             provider == null
@@ -435,11 +456,12 @@ public class PipelineService {
                 && model == null
                 && credentialId == null
                 && timeout == null
+                && maxTokens == null
                 && temperature == null
         ) {
             return null;
         }
-        return new LlmProviderConfig(provider, baseUrl, null, credentialId, model, timeout, temperature);
+        return new LlmProviderConfig(provider, baseUrl, null, credentialId, model, timeout, maxTokens, temperature);
     }
 
     private static Map<String, Object> llmConfigToMap(LlmRuntimeConfig config) {
@@ -466,6 +488,7 @@ public class PipelineService {
         putIfPresent(value, "credentialId", config.credentialId());
         putIfPresent(value, "model", config.model());
         putIfPresent(value, "timeoutSeconds", config.timeoutSeconds());
+        putIfPresent(value, "maxTokens", config.maxTokens());
         putIfPresent(value, "temperature", config.temperature());
         return value;
     }

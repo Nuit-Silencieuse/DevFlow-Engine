@@ -1,6 +1,7 @@
 package com.devflow.engine.api;
 
 import com.devflow.engine.service.LlmCredentialService;
+import com.devflow.engine.service.LlmConfigFileService;
 import com.devflow.engine.service.PipelineService;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -21,10 +22,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1")
 public class LlmConfigController {
     private final LlmCredentialService credentialService;
+    private final LlmConfigFileService configFileService;
     private final PipelineService pipelineService;
 
-    public LlmConfigController(LlmCredentialService credentialService, PipelineService pipelineService) {
+    public LlmConfigController(
+        LlmCredentialService credentialService,
+        LlmConfigFileService configFileService,
+        PipelineService pipelineService
+    ) {
         this.credentialService = credentialService;
+        this.configFileService = configFileService;
         this.pipelineService = pipelineService;
     }
 
@@ -63,6 +70,16 @@ public class LlmConfigController {
             config.provider(),
             config.model()
         ));
+    }
+
+    @GetMapping("/llm/config-file")
+    public ResponseEntity<LlmConfigFileResponse> getConfigFile() {
+        return ResponseEntity.ok(configFileService.readConfig());
+    }
+
+    @PatchMapping("/llm/config-file")
+    public ResponseEntity<LlmConfigFileResponse> updateConfigFile(@RequestBody LlmRuntimeConfig config) {
+        return ResponseEntity.ok(configFileService.updateConfig(config));
     }
 
     @PatchMapping("/pipelines/{id}/llm-config")

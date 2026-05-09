@@ -1,7 +1,8 @@
 param(
     [switch]$UseRealLlm,
     [int]$BackendPort = 8080,
-    [int]$FrontendPort = 5173
+    [int]$FrontendPort = 5173,
+    [string]$TemporalTarget = "127.0.0.1:7233"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,8 +25,17 @@ function Wait-Port {
     param([int]$Port, [int]$Seconds)
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
-        if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
-            return $true
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {
+            $connect = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+            if ($connect.AsyncWaitHandle.WaitOne(1000, $false)) {
+                $client.EndConnect($connect)
+                return $true
+            }
+        } catch {
+            # 端口尚未就绪时继续等待；这里不依赖 Get-NetTCPConnection，避免受本机权限策略影响。
+        } finally {
+            $client.Close()
         }
         Start-Sleep -Seconds 2
     }
@@ -84,11 +94,11 @@ if (-not (Wait-Port $BackendPort 90)) {
 }
 
 Write-Host "Starting execution-plane Python Activity Worker..."
-$workerArgs = @("-TemporalTarget", "localhost:7233")
 if ($UseRealLlm) {
-    $workerArgs += "-UseRealLlm"
+    & (Join-Path $PSScriptRoot "start-execution-worker.ps1") -TemporalTarget $TemporalTarget -UseRealLlm
+} else {
+    & (Join-Path $PSScriptRoot "start-execution-worker.ps1") -TemporalTarget $TemporalTarget
 }
-& (Join-Path $PSScriptRoot "start-execution-worker.ps1") @workerArgs
 
 Write-Host "Starting frontend console..."
 $frontend = Start-Process `

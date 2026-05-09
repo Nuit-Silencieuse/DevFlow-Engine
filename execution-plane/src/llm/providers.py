@@ -5,7 +5,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import replace
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from .config import LlmClientConfig
 from .errors import (
@@ -85,6 +85,8 @@ class OpenAICompatibleProvider:
             if request.temperature is not None
             else config.temperature,
         }
+        if request.max_tokens:
+            payload["max_tokens"] = request.max_tokens
         if request.response_format == "json":
             payload["response_format"] = {"type": "json_object"}
             payload["messages"] = append_json_instruction(
@@ -102,11 +104,9 @@ class OpenAICompatibleProvider:
             payload=payload,
             timeout_seconds=timeout_seconds,
         )
+        data = ensure_response_mapping(data)
         latency_ms = int((time.monotonic() - started_at) * 1000)
-        choices = data.get("choices") or []
-        text = ""
-        if choices:
-            text = ((choices[0].get("message") or {}).get("content")) or ""
+        text = extract_openai_compatible_text(data)
         return LlmResponse(
             provider=self.name,
             model=model,
@@ -146,7 +146,7 @@ class AnthropicCompatibleProvider:
             "temperature": request.temperature
             if request.temperature is not None
             else config.temperature,
-            "max_tokens": 4096,
+            "max_tokens": request.max_tokens or 4096,
         }
         if system_messages:
             payload["system"] = "\n\n".join(system_messages)
@@ -167,12 +167,9 @@ class AnthropicCompatibleProvider:
             payload=payload,
             timeout_seconds=timeout_seconds,
         )
+        data = ensure_response_mapping(data)
         latency_ms = int((time.monotonic() - started_at) * 1000)
-        text_parts = [
-            item.get("text", "")
-            for item in data.get("content", [])
-            if item.get("type") == "text"
-        ]
+        text_parts = extract_anthropic_compatible_text_parts(data)
         return LlmResponse(
             provider=self.name,
             model=model,
@@ -203,8 +200,84 @@ def resolve_provider_settings(
     return str(api_key), str(base_url), str(model)
 
 
+def ensure_response_mapping(data: Any) -> Mapping[str, Any]:
+    if isinstance(data, Mapping):
+        return data
+    raise LlmProviderError(
+        f"LLM provider response root must be an object, got {type(data).__name__}"
+    )
+
+
 def message_to_mapping(message: LlmMessage) -> dict[str, str]:
     return {"role": message.role, "content": message.content}
+
+
+def extract_openai_compatible_text(data: Mapping[str, Any]) -> str:
+    """Extract assistant text from OpenAI-compatible responses defensively.
+
+    Some providers claim OpenAI compatibility but return a relaxed shape such as
+    `choices: ["..."]` or `message: "..."`. The old parser assumed every layer was
+    a dict and raised AttributeError after the model had already spent a long time
+    generating. Here we accept the common relaxed forms and raise a provider error
+    with a clear message only when no textual payload can be found.
+    """
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+        if isinstance(choice, str):
+            return choice
+        if isinstance(choice, Mapping):
+            message = choice.get("message")
+            if isinstance(message, str):
+                return message
+            if isinstance(message, Mapping):
+                content = message.get("content")
+                extracted = extract_text_content(content)
+                if extracted:
+                    return extracted
+            extracted = extract_text_content(choice.get("text"))
+            if extracted:
+                return extracted
+    extracted = extract_text_content(data.get("output")) or extract_text_content(data.get("text"))
+    if extracted:
+        return extracted
+    raise LlmProviderError("LLM provider response did not contain assistant text")
+
+
+def extract_anthropic_compatible_text_parts(data: Mapping[str, Any]) -> list[str]:
+    content = data.get("content")
+    if isinstance(content, str):
+        return [content]
+    if not isinstance(content, list):
+        return []
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, Mapping) and item.get("type") == "text":
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return parts
+
+
+def extract_text_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, Mapping):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    if isinstance(value, Mapping):
+        return extract_text_content(value.get("text") or value.get("content"))
+    return ""
 
 
 def append_json_instruction(
@@ -220,12 +293,32 @@ def append_json_instruction(
 
     instruction = "只返回合法 JSON，不要包含 Markdown 或额外解释。"
     if json_schema:
-        instruction += f" JSON Schema: {json.dumps(json_schema, ensure_ascii=False)}"
+        instruction += compact_json_schema_instruction(json_schema)
     if not messages:
         return [{"role": "user", "content": instruction}]
     copied = [dict(message) for message in messages]
     copied[-1]["content"] = f"{copied[-1]['content']}\n\n{instruction}"
     return copied
+
+
+def compact_json_schema_instruction(json_schema: dict[str, Any]) -> str:
+    """Build a compact schema hint instead of appending the full JSON Schema.
+
+    Full schemas for PRD/design/diff artifacts can be thousands of characters and
+    are repeated on every request. The Agent-side validator still checks the exact
+    structure after the model returns; the prompt only needs top-level shape hints
+    to keep the request small and reduce generation latency.
+    """
+
+    required = json_schema.get("required") or []
+    properties = json_schema.get("properties") or {}
+    property_names = list(properties.keys()) if isinstance(properties, dict) else []
+    parts = [" Top-level JSON object required."]
+    if required:
+        parts.append(" Required keys: " + ", ".join(str(key) for key in required) + ".")
+    if property_names:
+        parts.append(" Allowed top-level keys: " + ", ".join(str(key) for key in property_names) + ".")
+    return "".join(parts)
 
 
 def default_json_transport(

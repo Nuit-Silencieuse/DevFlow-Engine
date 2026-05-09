@@ -386,6 +386,56 @@ class RequirementAgentTest(unittest.TestCase):
         self.assertTrue(any(item["path"] == "src/temporal_worker.py" for item in code_context["skipped_paths"]))
         self.assertNotIn("class HealthService", evidence_text)
 
+    def test_context_prompt_uses_lightweight_evidence_references(self):
+        from src.agents.requirement_agent import summarize_context_for_prompt
+
+        context_summary = summarize_context_for_prompt(
+            {
+                "root_path": "D:/repo",
+                "inspected_files": ["src/app.py"],
+                "search_queries": ["app"],
+                "evidence": [
+                    {
+                        "filePath": "src/app.py",
+                        "lineStart": 10,
+                        "lineEnd": 20,
+                        "excerpt": "class App:\n    pass",
+                        "supports": ["app"],
+                    }
+                ],
+                "files": [
+                    {
+                        "path": "src/app.py",
+                        "content": "x" * 3000,
+                        "truncated": False,
+                    }
+                ],
+            }
+        )
+
+        self.assertNotIn("excerpt", context_summary["evidence"][0])
+        self.assertEqual(context_summary["evidence"][0]["file_path"], "src/app.py")
+        self.assertLessEqual(len(context_summary["files"][0]["excerpt"]), 800)
+
+    def test_code_context_evidence_does_not_store_source_excerpt(self):
+        from src.agents.requirement_agent import evidence_item_to_mapping
+        from src.context import EvidenceItem
+
+        mapping = evidence_item_to_mapping(
+            EvidenceItem(
+                file_path="src/app.py",
+                line_start=1,
+                line_end=20,
+                excerpt="class App:\n    pass",
+                relevance_reason="matched by score",
+                supports=("app",),
+            )
+        )
+
+        self.assertNotIn("excerpt", mapping)
+        self.assertEqual(mapping["filePath"], "src/app.py")
+        self.assertEqual(mapping["lineStart"], 1)
+
     def test_exploration_trace_records_progressive_tool_steps(self):
         from src.agents.requirement_agent import RequirementAgent
 

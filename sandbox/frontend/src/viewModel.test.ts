@@ -28,12 +28,14 @@ function testBuildCreateRequestOmitsEmptyRepository(): void {
     llmApiKey: "",
     llmModel: "",
     llmTimeoutSeconds: "",
+    llmMaxTokens: "",
     llmTemperature: "",
     codeLlmProvider: "",
     codeLlmBaseUrl: "",
     codeLlmApiKey: "",
     codeLlmModel: "",
     codeLlmTimeoutSeconds: "",
+    codeLlmMaxTokens: "",
     codeLlmTemperature: "",
   });
 
@@ -66,12 +68,14 @@ function testBuildCreateRequestNormalizesRepositoryContext(): void {
     llmApiKey: "sk-test",
     llmModel: "general-model",
     llmTimeoutSeconds: "240",
+    llmMaxTokens: "1800",
     llmTemperature: "0",
     codeLlmProvider: "openai_compatible",
     codeLlmBaseUrl: "https://api.example/v1",
     codeLlmApiKey: "",
     codeLlmModel: "coder-model",
     codeLlmTimeoutSeconds: "360",
+    codeLlmMaxTokens: "3500",
     codeLlmTemperature: "0",
   });
 
@@ -85,8 +89,10 @@ function testBuildCreateRequestNormalizesRepositoryContext(): void {
   });
   assert.equal(request.llmConfig?.defaultConfig?.model, "general-model");
   assert.equal(request.llmConfig?.defaultConfig?.apiKey, "sk-test");
+  assert.equal(request.llmConfig?.defaultConfig?.maxTokens, 1800);
   assert.equal(request.llmConfig?.stageOverrides?.CODE_GENERATION.model, "coder-model");
   assert.equal(request.llmConfig?.stageOverrides?.CODE_GENERATION.timeoutSeconds, 360);
+  assert.equal(request.llmConfig?.stageOverrides?.CODE_GENERATION.maxTokens, 3500);
 }
 
 function testSelectReviewStagePrefersCurrentStage(): void {

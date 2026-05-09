@@ -308,6 +308,14 @@ def build_review_messages(state: ReviewAgentState) -> tuple[LlmMessage, ...]:
         "human_feedback": state.get("feedback_text", ""),
         "review_plan": state.get("review_plan", {}),
         "response_language": state.get("response_language", "same_as_requirement"),
+        "output_limits": {
+            "summary_max_chars": 240,
+            "findings_max_items": 8,
+            "finding_field_max_chars": 180,
+            "quality_gates_max_items": 6,
+            "risks_max_items": 5,
+            "open_questions_max_items": 3,
+        },
     }
     return (
         LlmMessage(
@@ -320,6 +328,7 @@ def build_review_messages(state: ReviewAgentState) -> tuple[LlmMessage, ...]:
                 "findings 必须给出 severity、description、recommendation；能够定位文件时给出 file_path 和 line。"
                 "quality_gates 必须说明测试、补丁范围、需求覆盖和剩余风险是否通过。"
                 "如果测试未运行或失败，status 不能是 APPROVED。"
+                "输出必须紧凑并遵守 output_limits；不要复制完整 diff、源码或测试日志，只引用文件、行号和简短证据。"
             ),
         ),
         LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
@@ -330,10 +339,10 @@ def normalize_review_report_payload(value: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": first_text(value, "status") or "NEEDS_CHANGES",
         "summary": first_text(value, "summary"),
-        "findings": normalize_named_items(value.get("findings")),
-        "quality_gates": normalize_named_items(value.get("quality_gates") or value.get("qualityGates")),
-        "risks": ensure_text_list(value.get("risks")),
-        "open_questions": ensure_text_list(value.get("open_questions") or value.get("openQuestions")),
+        "findings": normalize_named_items(value.get("findings"))[:8],
+        "quality_gates": normalize_named_items(value.get("quality_gates") or value.get("qualityGates"))[:6],
+        "risks": ensure_text_list(value.get("risks"))[:5],
+        "open_questions": ensure_text_list(value.get("open_questions") or value.get("openQuestions"))[:3],
         "quality": dict(value.get("quality") or {}) if isinstance(value.get("quality"), dict) else {},
     }
 
@@ -358,11 +367,28 @@ REVIEW_REPORT_SCHEMA = {
     "required": ["status", "summary", "findings", "quality_gates", "risks", "open_questions"],
     "properties": {
         "status": {"type": "string", "enum": ["APPROVED", "NEEDS_CHANGES", "BLOCKED"]},
-        "summary": {"type": "string"},
-        "findings": {"type": "array", "items": {"type": "object"}},
-        "quality_gates": {"type": "array", "items": {"type": "object"}},
-        "risks": {"type": "array", "items": {"type": "string"}},
-        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string", "maxLength": 240},
+        "findings": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {"type": "string", "maxLength": 40},
+                    "file_path": {"type": "string", "maxLength": 160},
+                    "line": {"type": "integer"},
+                    "description": {"type": "string", "maxLength": 180},
+                    "recommendation": {"type": "string", "maxLength": 180},
+                },
+            },
+        },
+        "quality_gates": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {"type": "object"},
+        },
+        "risks": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 180}},
+        "open_questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 180}},
         "quality": {"type": "object"},
     },
 }

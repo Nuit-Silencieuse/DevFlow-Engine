@@ -205,6 +205,8 @@ def select_stage_llm_config(value: Any, stage_name: str) -> dict[str, Any]:
         override = stage_overrides.get(stage_name) or stage_overrides.get(stage_name.upper())
         if isinstance(override, dict):
             selected.update({key: item for key, item in override.items() if item not in (None, "")})
+    if selected and stage_name:
+        selected["stage"] = stage_name.lower()
     return selected
 
 

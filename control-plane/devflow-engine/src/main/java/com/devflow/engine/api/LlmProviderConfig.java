@@ -7,6 +7,7 @@ public record LlmProviderConfig(
     String credentialId,
     String model,
     Integer timeoutSeconds,
+    Integer maxTokens,
     Double temperature
 ) {
 }

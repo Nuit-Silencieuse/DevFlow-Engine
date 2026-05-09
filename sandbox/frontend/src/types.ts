@@ -36,6 +36,7 @@ export interface LlmProviderConfig {
   credentialId?: string;
   model?: string;
   timeoutSeconds?: number;
+  maxTokens?: number;
   temperature?: number;
 }
 
@@ -55,6 +56,11 @@ export interface LlmConfigTestResponse {
   message: string;
   provider: string;
   model: string;
+}
+
+export interface LlmConfigFileResponse {
+  path: string;
+  config: Record<string, unknown>;
 }
 
 export interface CreatePipelineResponse {

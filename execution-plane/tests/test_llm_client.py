@@ -14,6 +14,7 @@ from src.llm import (
     LlmMessage,
     LlmProviderError,
     LlmRequest,
+    LlmTimeoutError,
     LlmTraceRecorder,
     OpenAICompatibleProvider,
 )
@@ -95,6 +96,35 @@ class LlmClientTest(unittest.TestCase):
         self.assertEqual(config.temperature, 0)
         self.assertEqual(config.settings_for("second")["api_key"], "sk-runtime")
         self.assertEqual(config.settings_for("second")["base_url"], "https://runtime.example/v1")
+
+    def test_runtime_overrides_keep_existing_api_key_when_key_is_not_supplied(self):
+        config = LlmClientConfig(
+            default_provider="openai_compatible",
+            default_model="base-model",
+            max_retries=0,
+            provider_settings={
+                "openai_compatible": {
+                    "api_key": "sk-from-env",
+                    "base_url": "https://old.example/v1",
+                    "default_model": "old-model",
+                }
+            },
+        ).with_runtime_overrides(
+            {
+                "provider": "openai_compatible",
+                "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen3.5-plus-2026-02-15",
+                "timeoutSeconds": 240,
+                "maxTokens": 1800,
+                "temperature": 0,
+                "stage": "requirement_analysis",
+            }
+        )
+
+        settings = config.settings_for("openai_compatible")
+        self.assertEqual(settings["api_key"], "sk-from-env")
+        self.assertEqual(settings["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.assertEqual(config.max_tokens_for_task("requirement_analysis"), 1800)
 
     def test_markdown_json_block_is_extracted(self):
         client = LlmClient(
@@ -315,6 +345,24 @@ class LlmClientTest(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(provider.calls, 2)
 
+    def test_timeout_is_not_retried_inside_single_activity_attempt(self):
+        provider = FakeProvider(
+            response_text='{"ok": true}',
+            failures=[LlmTimeoutError("timeout")],
+        )
+        client = LlmClient(
+            config=LlmClientConfig(default_provider="fake", max_retries=2),
+            providers={"fake": provider},
+            sleep=lambda _: None,
+        )
+
+        with self.assertRaises(LlmTimeoutError):
+            client.complete_json(
+                LlmRequest(task="requirement_analysis", messages=(LlmMessage("user", "x"),))
+            )
+
+        self.assertEqual(provider.calls, 1)
+
     def test_sensitive_api_key_is_not_exposed_in_configuration_error(self):
         config = LlmClientConfig(
             default_provider="openai_compatible",
@@ -424,6 +472,32 @@ class LlmClientTest(unittest.TestCase):
         )
 
         self.assertEqual(captured["requirement_analysis"], 300)
+
+    def test_task_max_tokens_are_applied_to_provider_request(self):
+        captured = {}
+
+        class CapturingProvider:
+            name = "fake"
+
+            def complete(self, request, config):
+                captured["max_tokens"] = request.max_tokens
+                return FakeProvider(response_text='{"ok": true}', name="fake").complete(
+                    request,
+                    config,
+                )
+
+        config = LlmClientConfig(
+            default_provider="fake",
+            max_retries=0,
+            task_max_tokens={"code_generation": 1234},
+        )
+        client = LlmClient(config=config, providers={"fake": CapturingProvider()})
+
+        client.complete_json(
+            LlmRequest(task="code_generation", messages=(LlmMessage("user", "x"),))
+        )
+
+        self.assertEqual(captured["max_tokens"], 1234)
 
     def test_sources_allow_environment_to_override_file_defaults(self):
         config_path = write_test_config(
@@ -608,6 +682,7 @@ class LlmClientTest(unittest.TestCase):
             LlmRequest(
                 task="shape",
                 response_format="json",
+                max_tokens=77,
                 messages=(LlmMessage("user", "返回 JSON"),),
             ),
             config,
@@ -615,9 +690,67 @@ class LlmClientTest(unittest.TestCase):
 
         self.assertEqual(captured["url"], "https://llm.example/v1/chat/completions")
         self.assertEqual(captured["payload"]["model"], "demo-openai")
+        self.assertEqual(captured["payload"]["max_tokens"], 77)
+        self.assertNotIn("JSON Schema:", captured["payload"]["messages"][-1]["content"])
         self.assertEqual(captured["payload"]["response_format"], {"type": "json_object"})
         self.assertNotIn("sk-test", json.dumps(response.usage))
         self.assertEqual(response.text, '{"ok": true}')
+
+    def test_openai_provider_accepts_relaxed_string_choice_response(self):
+        def transport(url, headers, payload, timeout_seconds):
+            return {
+                "id": "req-openai-relaxed",
+                "choices": ['{"ok": true}'],
+            }
+
+        provider = OpenAICompatibleProvider(transport=transport)
+        config = LlmClientConfig(
+            provider_settings={
+                "openai_compatible": {
+                    "api_key": "sk-test",
+                    "base_url": "https://llm.example/v1",
+                    "default_model": "demo-openai",
+                }
+            }
+        )
+
+        response = provider.complete(
+            LlmRequest(
+                task="shape",
+                response_format="json",
+                messages=(LlmMessage("user", "x"),),
+            ),
+            config,
+        )
+
+        self.assertEqual(response.text, '{"ok": true}')
+
+    def test_openai_provider_reports_missing_text_instead_of_attribute_error(self):
+        def transport(url, headers, payload, timeout_seconds):
+            return {"id": "req-openai-empty", "choices": [{"message": 123}]}
+
+        provider = OpenAICompatibleProvider(transport=transport)
+        config = LlmClientConfig(
+            provider_settings={
+                "openai_compatible": {
+                    "api_key": "sk-test",
+                    "base_url": "https://llm.example/v1",
+                    "default_model": "demo-openai",
+                }
+            }
+        )
+
+        with self.assertRaises(LlmProviderError) as raised:
+            provider.complete(
+                LlmRequest(
+                    task="shape",
+                    response_format="json",
+                    messages=(LlmMessage("user", "x"),),
+                ),
+                config,
+            )
+
+        self.assertIn("assistant text", str(raised.exception))
 
     def test_anthropic_provider_converts_request_and_response_shape(self):
         captured = {}
@@ -648,6 +781,7 @@ class LlmClientTest(unittest.TestCase):
             LlmRequest(
                 task="shape",
                 response_format="json",
+                max_tokens=88,
                 messages=(
                     LlmMessage("system", "只返回 JSON"),
                     LlmMessage("user", "返回 JSON"),
@@ -658,6 +792,7 @@ class LlmClientTest(unittest.TestCase):
 
         self.assertEqual(captured["url"], "https://anthropic.example/v1/messages")
         self.assertEqual(captured["payload"]["model"], "demo-anthropic")
+        self.assertEqual(captured["payload"]["max_tokens"], 88)
         self.assertEqual(captured["payload"]["system"], "只返回 JSON")
         self.assertIn("只返回合法 JSON", captured["payload"]["messages"][-1]["content"])
         self.assertEqual(response.text, '{"ok": true}')

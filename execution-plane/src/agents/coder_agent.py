@@ -483,6 +483,14 @@ def build_coder_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
         },
         "code_plan": state.get("code_plan", {}),
         "response_language": state.get("response_language", "same_as_requirement"),
+        "output_limits": {
+            "summary_max_chars": 240,
+            "changed_files_max_items": 12,
+            "changed_file_summary_max_chars": 180,
+            "risks_max_items": 5,
+            "open_questions_max_items": 3,
+            "policy": "diff_patch may be long, but all non-diff JSON fields must stay compact.",
+        },
     }
     return (
         LlmMessage(
@@ -519,6 +527,13 @@ def build_coder_messages(state: CoderAgentState) -> tuple[LlmMessage, ...]:
                 "Generate only an incremental corrective unified diff based on human_feedback, "
                 "review_report, and test_run_results. Do not re-output the old patch unless the "
                 "feedback explicitly asks to revert or replace that exact code."
+            ),
+        ),
+        LlmMessage(
+            role="system",
+            content=(
+                "Keep non-diff JSON fields compact and follow output_limits. "
+                "Do not copy design_doc, repository maps, or long evidence into summary, risks, changed_files, or open_questions."
             ),
         ),
         LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
@@ -772,8 +787,17 @@ def summarize_code_context(code_context: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": code_context.get("status", "SKIPPED"),
         "root_path": code_context.get("root_path", ""),
-        "inspected_files": list(code_context.get("inspected_files", [])),
-        "evidence": list(code_context.get("evidence", []))[:8],
+        "inspected_files": list(code_context.get("inspected_files", []))[:12],
+        "evidence_refs": [
+            {
+                "file_path": item.get("file_path") or item.get("filePath") or "",
+                "line_start": item.get("line_start") or item.get("lineStart"),
+                "line_end": item.get("line_end") or item.get("lineEnd"),
+                "supports": list(item.get("supports") or [])[:4],
+            }
+            for item in list(code_context.get("evidence", []))[:8]
+            if isinstance(item, dict)
+        ],
         "confidence": code_context.get("confidence", 0.0),
         "open_questions": list(code_context.get("open_questions", [])),
         "notes": list(code_context.get("notes", [])),
@@ -979,25 +1003,26 @@ CODER_PATCH_SCHEMA = {
     "type": "object",
     "required": ["summary", "diff_patch", "changed_files", "risks", "open_questions"],
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": "string", "maxLength": 240},
         "diff_patch": {
             "type": "string",
             "description": "Unified diff text only. Do not return JSON Patch.",
         },
         "changed_files": {
             "type": "array",
+            "maxItems": 12,
             "items": {
                 "type": "object",
                 "required": ["path", "operation", "summary"],
                 "properties": {
-                    "path": {"type": "string"},
+                    "path": {"type": "string", "maxLength": 160},
                     "operation": {"type": "string", "enum": ["create", "update", "delete"]},
-                    "summary": {"type": "string"},
+                    "summary": {"type": "string", "maxLength": 180},
                 },
             },
         },
-        "risks": {"type": "array", "items": {"type": "string"}},
-        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 180}},
+        "open_questions": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 180}},
         "quality": {"type": "object"},
     },
 }

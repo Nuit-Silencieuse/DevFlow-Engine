@@ -162,6 +162,33 @@ async function testSummaryAndArtifactUseSplitEndpoints(): Promise<void> {
   assert.equal(artifact.output.diff_patch, "diff --git a/a b/a");
 }
 
+async function testUpdateLlmConfigFileUsesConfigEndpoint(): Promise<void> {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const client = new PipelineApiClient("/api/v1", async (input, init) => {
+    calls.push({ input, init });
+    return new Response(JSON.stringify({
+      path: "execution-plane/config/llm.local.json",
+      config: { defaultModel: "glm-5.1" },
+    }));
+  });
+
+  const response = await client.updateLlmConfigFile({
+    defaultConfig: {
+      provider: "openai_compatible",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "glm-5.1",
+      timeoutSeconds: 240,
+      maxTokens: 1800,
+      temperature: 0,
+    },
+  });
+
+  assert.equal(calls[0].input, "/api/v1/llm/config-file");
+  assert.equal(calls[0].init?.method, "PATCH");
+  assert.equal(JSON.parse(String(calls[0].init?.body)).defaultConfig.model, "glm-5.1");
+  assert.equal(response.config.defaultModel, "glm-5.1");
+}
+
 async function main(): Promise<void> {
   await testCreatePipelineUsesControlPlaneContract();
   await testCreatePipelineSupportsAdvancedRepositoryOptions();
@@ -169,6 +196,7 @@ async function main(): Promise<void> {
   await testApiErrorKeepsBackendMessage();
   await testGetPipelineParsesCodeContextAndExplorationTrace();
   await testSummaryAndArtifactUseSplitEndpoints();
+  await testUpdateLlmConfigFileUsesConfigEndpoint();
 }
 
 main().catch((error) => {
